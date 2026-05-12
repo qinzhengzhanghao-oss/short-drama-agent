@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ShortDrama Studio — 短剧自动化生产平台</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- 左侧导航 -->
+    <nav id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <span class="logo-icon">🎬</span>
+          <span class="logo-text">ShortDrama</span>
+        </div>
+        <div class="logo-subtitle">AI 短剧生产平台</div>
+      </div>
+      <div class="steps-nav" id="stepsNav"></div>
+    </nav>
+
+    <!-- 右侧主内容 -->
+    <main id="main-content">
+      <div class="content-header" id="contentHeader">
+        <h2 class="step-title" id="stepTitle">项目创建</h2>
+        <div class="step-progress-bar">
+          <div class="progress-fill" id="progressFill"></div>
+        </div>
+      </div>
+      <div class="content-body" id="contentBody"></div>
+      <div class="content-footer" id="contentFooter">
+        <button class="btn btn-secondary" id="prevBtn" onclick="App.prevStep()">← 上一步</button>
+        <button class="btn btn-primary" id="nextBtn" onclick="App.nextStep()">下一步 →</button>
+      </div>
+    </main>
+  </div>
+
+  <!-- 通知容器 -->
+  <div id="notificationContainer"></div>
+
+  <!-- 确认弹窗 -->
+  <div class="modal-overlay" id="confirmModal">
+    <div class="modal-card">
+      <div class="modal-body" id="confirmBody"></div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="App.closeConfirm()">取消</button>
+        <button class="btn btn-danger" id="confirmActionBtn" onclick="App.confirmAction()">确认</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/utils.js"></script>
+  <script src="js/api.js"></script>
+  <script src="js/modules/project.js"></script>
+  <script src="js/modules/assets.js"></script>
+  <script src="js/modules/script.js"></script>
+  <script src="js/modules/storyboard.js"></script>
+  <script src="js/modules/prompt.js"></script>
+  <script src="js/modules/generate.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
