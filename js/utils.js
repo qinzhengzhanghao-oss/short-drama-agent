@@ -121,40 +121,36 @@ const Utils = {
    */
   parseScript(text) {
     const lines = text.split('\n');
-    const entities = [];
     const fullText = text;
-
-    // 简单实体提取：中文名（2-4字常见姓氏组合）或英文名
-    const namePattern = /([\u4e00-\u9fa5]{2,4}(?:先生|小姐|医生|博士|老师|老板|太太)?)/g;
-    let match;
+    const entities = [];
     const seen = new Set();
 
-    while ((match = namePattern.exec(fullText)) !== null) {
-      const name = match[1].trim();
+    // 使用 matchAll 代替 exec 循环，性能更好
+    const namePat = /[\u4e00-\u9fa5]{2,4}(?:先生|小姐|医生|博士|老师|老板|太太|女士|同志|同学|局长|经理|主任|教授)?/g;
+    for (const m of fullText.matchAll(namePat)) {
+      const name = m[0].trim();
       if (name && !seen.has(name) && name.length >= 2) {
         seen.add(name);
-        entities.push({
-          name,
-          type: 'character',
-          positions: []
-        });
+        entities.push({ name, type: 'character' });
       }
     }
 
-    // 场景关键词
-    const scenePatterns = [
-      /(?:场景|地点|环境)[：:]\s*([^\n]+)/gi,
-      /(?:室内|室外|在|于)\s*([\u4e00-\u9fa5]{2,10}(?:房间|室|厅|楼|店|园|场|处))/g
-    ];
-
-    scenePatterns.forEach(pattern => {
-      while ((match = pattern.exec(fullText)) !== null) {
-        const scene = match[1].trim();
-        if (scene && !entities.find(e => e.name === scene)) {
-          entities.push({ name: scene, type: 'scene', positions: [] });
-        }
+    // 场景提取
+    const scenePat = /(?:场景|地点|环境)[：:]\s*([^\n，。！？,.:;!?]{2,20})/gi;
+    for (const m of fullText.matchAll(scenePat)) {
+      const name = m[1].trim();
+      if (name && !entities.some(e => e.name === name)) {
+        entities.push({ name, type: 'scene' });
       }
-    });
+    }
+
+    const locPat = /(?:室内|室外|在|于)\s*([\u4e00-\u9fa5]{2,10}(?:房间|室|厅|楼|店|园|场|处|区|馆))/g;
+    for (const m of fullText.matchAll(locPat)) {
+      const name = m[1].trim();
+      if (name && !entities.some(e => e.name === name)) {
+        entities.push({ name, type: 'scene' });
+      }
+    }
 
     return { entities, lines, fullText };
   },
@@ -163,15 +159,23 @@ const Utils = {
    * 高亮文本中的实体
    */
   highlightEntities(text, entities, assetMap) {
-    let result = text;
-    entities.sort((a, b) => b.name.length - a.name.length).forEach(entity => {
-      const isBound = assetMap && assetMap[entity.name];
+    // 排序：长名优先
+    const sorted = [...entities].sort((a, b) => b.name.length - a.name.length);
+    const escaped = sorted.map(e => e.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    if (escaped.length === 0) return text;
+    
+    // 一次性正则匹配所有实体
+    const pattern = new RegExp(escaped.join('|'), 'g');
+    const lookup = {};
+    sorted.forEach(e => { lookup[e.name] = e; });
+
+    return text.replace(pattern, (match) => {
+      const entity = lookup[match];
+      const isBound = entity && assetMap && assetMap[entity.name];
       const color = isBound ? '#22C55E' : '#EF4444';
       const cls = isBound ? 'entity-bound' : 'entity-unbound';
-      const regex = new RegExp(entity.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g');
-      result = result.replace(regex, `<span class="${cls}" style="color:${color};font-weight:500;">$&</span>`);
+      return `<span class="${cls}" style="color:${color};font-weight:500;">${match}</span>`;
     });
-    return result;
   },
 
   /**
