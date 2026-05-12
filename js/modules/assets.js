@@ -97,16 +97,20 @@ const AssetsModule = {
    */
   _renderAssetItem(item, idx) {
     const expanded = App.state._expandedAsset === item.id;
+    const images = item.images || [];
+    const primaryImage = item.primaryImage || (images.length > 0 ? images[0] : null);
 
     return `
-      <div class="list-item" style="flex-direction:column;padding:0;${expanded ? '' : ''}">
+      <div class="list-item" style="flex-direction:column;padding:0;">
         <div style="display:flex;align-items:center;gap:12px;width:100%;padding:12px 16px;cursor:pointer;"
              onclick="AssetsModule._toggleExpand('${item.id}')">
           <span style="font-size:20px;">${item.type === 'character' ? '👤' : item.type === 'scene' ? '🏠' : '📦'}</span>
+          ${primaryImage ? `<img src="${primaryImage}" style="width:40px;height:40px;border-radius:8px;object-fit:cover;border:1px solid var(--border-default);">` : ''}
           <div style="flex:1;">
             <div style="font-weight:500;">${item.name}</div>
             <div style="font-size:12px;color:var(--text-muted);">
-              ${item.variants ? item.variants.length : 0} 个变体
+              ${images.length > 0 ? `${images.length} 张参考图` : '暂无图片'}
+              ${item.description ? ` | ${item.description.substring(0, 20)}${item.description.length > 20 ? '...' : ''}` : ''}
             </div>
           </div>
           <span style="color:var(--text-muted);font-size:12px;">${expanded ? '▲ 收起' : '▼ 展开'}</span>
@@ -115,16 +119,50 @@ const AssetsModule = {
 
         ${expanded ? `
           <div style="padding:0 16px 16px;width:100%;border-top:1px solid var(--border-default);padding-top:12px;">
-            <!-- Variants -->
+            <!-- 参考图片 -->
             <div style="margin-bottom:12px;">
-              <label class="form-label">变体列表</label>
-              <button class="btn btn-sm btn-primary" onclick="AssetsModule._addVariant('${item.id}')" style="margin-bottom:8px;">
-                ＋ 添加变体
-              </button>
-              ${this._renderVariants(item)}
+              <label class="form-label">参考图片</label>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                ${images.length > 0 ? images.map((img, imgIdx) => `
+                  <div class="thumbnail-item" style="position:relative;">
+                    <img src="${img}" style="width:80px;height:80px;object-fit:cover;border-radius:8px;border:2px solid ${imgIdx === 0 ? 'var(--brand-purple)' : 'var(--border-default)'};"
+                         onerror="this.style.display='none'">
+                    <button class="btn-icon" style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;font-size:10px;background:rgba(239,68,68,0.9);color:#fff;border-radius:50%;"
+                      onclick="AssetsModule._deleteImage('${item.id}', ${imgIdx})">✕</button>
+                    ${imgIdx === 0 ? '<div style="font-size:10px;color:var(--brand-purple);text-align:center;">主参考</div>' : ''}
+                  </div>
+                `).join('') : ''}
+                <div class="upload-zone" style="padding:16px;width:80px;height:80px;display:flex;flex-direction:column;align-items:center;justify-content:center;cursor:pointer;border:2px dashed var(--border-default);border-radius:8px;"
+                     onclick="AssetsModule._uploadImages('${item.id}')">
+                  <div style="font-size:24px;opacity:0.5;">+</div>
+                </div>
+              </div>
             </div>
 
-            <!-- Delete entry button -->
+            <!-- 外观描述 -->
+            <div class="form-group" style="margin-bottom:12px;">
+              <label class="form-label">外观描述（可选）</label>
+              <input type="text" class="form-input"
+                placeholder="描述该角色/场景/道具的外观特征..."
+                value="${item.description || ''}"
+                onchange="AssetsModule._updateDesc('${item.id}', this.value)">
+            </div>
+
+            <!-- 变体（高级）折叠 -->
+            <div style="margin-bottom:12px;">
+              <details>
+                <summary style="cursor:pointer;font-size:13px;color:var(--text-muted);">
+                  🎨 变体管理（高级） — ${(item.variants || []).length} 个变体
+                </summary>
+                <div style="margin-top:8px;">
+                  <button class="btn btn-sm btn-primary" onclick="AssetsModule._addVariant('${item.id}')" style="margin-bottom:8px;">
+                    ＋ 添加变体
+                  </button>
+                  ${this._renderVariants(item)}
+                </div>
+              </details>
+            </div>
+
             <div style="text-align:right;">
               <button class="btn btn-sm btn-danger" onclick="AssetsModule._deleteEntry('${item.id}')">删除条目</button>
             </div>
@@ -167,7 +205,7 @@ const AssetsModule = {
               ${v.images.map((img, imgIdx) => `
                 <div class="thumbnail-item">
                   <img src="${img}" alt="参考图" onerror="this.style.display='none'">
-                  <button class="delete-btn" onclick="AssetsModule._deleteImage('${item.id}', ${vi}, ${imgIdx})">✕</button>
+                  <button class="delete-btn" onclick="AssetsModule._deleteVariantImage('${item.id}', ${vi}, ${imgIdx})">✕</button>
                 </div>
               `).join('')}
             </div>
@@ -285,18 +323,29 @@ const AssetsModule = {
   /**
    * 删除变体
    */
-  _deleteVariant(assetId, variantIdx) {
+  /**
+   * 删除变体中的图片
+   */
+  _deleteVariantImage(assetId, variantIdx, imgIdx) {
     const assets = App.state.assets || [];
     const asset = assets.find(a => a.id === assetId);
     if (!asset || !asset.variants) return;
+    const variant = asset.variants[variantIdx];
+    if (!variant || !variant.images) return;
+    variant.images.splice(imgIdx, 1);
+    this._persist();
+    App.renderStep();
+  },
 
-    asset.variants.splice(variantIdx, 1);
-
-    // 如果删除了主参考，设置第一个为主参考
-    if (asset.variants.length > 0 && !asset.variants.some(v => v.isPrimary)) {
-      asset.variants[0].isPrimary = true;
-    }
-
+  /**
+   * 删除图片
+   */
+  _deleteImage(assetId, imgIdx) {
+    const assets = App.state.assets || [];
+    const asset = assets.find(a => a.id === assetId);
+    if (!asset || !asset.images) return;
+    asset.images.splice(imgIdx, 1);
+    if (asset.images.length === 0) delete asset.primaryImage;
     this._persist();
     App.renderStep();
   },
@@ -315,9 +364,9 @@ const AssetsModule = {
   },
 
   /**
-   * 上传图片
+   * 上传图片（直接上传到条目，不需经过变体）
    */
-  async _uploadImages(assetId, variantIdx) {
+  async _uploadImages(assetId) {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
@@ -329,17 +378,13 @@ const AssetsModule = {
 
       const assets = App.state.assets || [];
       const asset = assets.find(a => a.id === assetId);
-      if (!asset || !asset.variants) return;
+      if (!asset) return;
 
-      const variant = asset.variants[variantIdx];
-      if (!variant) return;
-
-      // 用DataURL模式在本地显示
       for (const file of files) {
         try {
           const dataUrl = await Utils.readFileAsDataURL(file);
-          if (!variant.images) variant.images = [];
-          variant.images.push(dataUrl);
+          if (!asset.images) asset.images = [];
+          asset.images.push(dataUrl);
         } catch (err) {
           App.showNotification(`图片上传失败: ${err.message}`, 'error');
         }
@@ -352,33 +397,16 @@ const AssetsModule = {
     input.click();
   },
 
-  /**
-   * 删除图片
-   */
-  _deleteImage(assetId, variantIdx, imgIdx) {
-    const assets = App.state.assets || [];
-    const asset = assets.find(a => a.id === assetId);
-    if (!asset || !asset.variants) return;
 
-    const variant = asset.variants[variantIdx];
-    if (!variant || !variant.images) return;
-
-    variant.images.splice(imgIdx, 1);
-    this._persist();
-    App.renderStep();
-  },
 
   /**
-   * 更新变体描述
+   * 更新描述
    */
-  _updateVariantDesc(assetId, variantIdx, value) {
+  _updateDesc(assetId, value) {
     const assets = App.state.assets || [];
     const asset = assets.find(a => a.id === assetId);
-    if (!asset || !asset.variants) return;
-
-    const variant = asset.variants[variantIdx];
-    if (variant) {
-      variant.description = value;
+    if (asset) {
+      asset.description = value;
       this._persist();
     }
   },
@@ -391,21 +419,20 @@ const AssetsModule = {
     const warnings = [];
 
     assets.forEach(asset => {
-      if (!asset.variants || asset.variants.length === 0) {
-        warnings.push(`${asset.name}: 无变体`);
-        return;
-      }
-
-      const hasPrimary = asset.variants.some(v => v.isPrimary);
-      if (!hasPrimary) {
-        warnings.push(`${asset.name}: 未设置主参考变体`);
-      }
-
-      asset.variants.forEach((v, vi) => {
-        if (!v.images || v.images.length === 0) {
-          warnings.push(`${asset.name} 变体 #${vi + 1}: 无参考图片`);
+      const images = asset.images || [];
+      if (asset.variants && asset.variants.length > 0) {
+        const hasPrimary = asset.variants.some(v => v.isPrimary);
+        if (!hasPrimary) {
+          warnings.push(`${asset.name}: 未设置主参考变体`);
         }
-      });
+        asset.variants.forEach((v, vi) => {
+          if (!v.images || v.images.length === 0) {
+            warnings.push(`${asset.name} 变体 #${vi + 1}: 无参考图片`);
+          }
+        });
+      } else if (images.length === 0) {
+        warnings.push(`${asset.name}: 无参考图片`);
+      }
     });
 
     return warnings;
