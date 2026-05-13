@@ -357,58 +357,59 @@ const Utils = {
       return await Utils._extractPdfText(buf);
     }
     
-    // 真正的 TXT 文件：用 arrayBuffer + TextDecoder
+    // 真正的 TXT 文件：用 arrayBuffer + 双编码试读
     const buf = await file.arrayBuffer();
+    const u8 = new Uint8Array(buf);
     
-    // 只比较两种最常用的中文编码：UTF-8 和 GBK
-    // 用更精确的评分来判断哪个是正确的
-    function scoreText(text) {
-      let validChinese = 0;    // 常见汉字（常用3500字）
-      let rareChinese = 0;     // 冷僻汉字
-      let replacements = 0;    // 替换字符 \uFFFD
-      let total = Math.min(text.length, 3000);
-      
-      for (let i = 0; i < total; i++) {
-        const code = text.charCodeAt(i);
-        if (code === 0xFFFD) { replacements++; continue; }
-        if (code >= 0x4e00 && code <= 0x9fff) {
-          // 常用汉字范围：0x4e00-0x9fa5
-          if (code <= 0x9fa5) validChinese++;
-          else rareChinese++;
+    // 方法1: 检测是否有 UTF-8 特有的多字节序列
+    let isDefinitelyUtf8 = true;
+    let utf8SequenceCount = 0;
+    let possibleGbkPairCount = 0;
+    
+    for (let i = 0; i < Math.min(buf.byteLength, 1000); i++) {
+      const b = u8[i];
+      // UTF-8 2字节序列: 110xxxxx 10xxxxxx
+      if (b >= 0xC0 && b <= 0xDF && i + 1 < buf.byteLength) {
+        const n = u8[i+1];
+        if (n >= 0x80 && n <= 0xBF) {
+          utf8SequenceCount++;
+          i++;
+          continue;
         }
       }
-      
-      // 评分：有效中文多 + 替换字符少 = 高分
-      // 冷僻汉字要打折（因为可能是错误解码的产物）
-      return validChinese * 3 + rareChinese * 1 - replacements * 10;
+      // UTF-8 3字节序列: 1110xxxx 10xxxxxx 10xxxxxx
+      if (b >= 0xE0 && b <= 0xEF && i + 2 < buf.byteLength) {
+        const n1 = u8[i+1], n2 = u8[i+2];
+        if (n1 >= 0x80 && n1 <= 0xBF && n2 >= 0x80 && n2 <= 0xBF) {
+          utf8SequenceCount++;
+          i += 2;
+          continue;
+        }
+      }
+      // 如果高字节不是 UTF-8 多字节序列的开始字节
+      if (b >= 0x80 && b <= 0xBF) {
+        // 10xxxxxx 作为开头字节说明不是 UTF-8
+        isDefinitelyUtf8 = false;
+      }
+      // GBK 双字节: 高字节 81-FE, 低字节 40-FE
+      if (b >= 0x81 && b <= 0xFE && i + 1 < buf.byteLength) {
+        const lo = u8[i+1];
+        if ((lo >= 0x40 && lo <= 0x7E) || (lo >= 0x80 && lo <= 0xFE)) {
+          possibleGbkPairCount++;
+        }
+      }
     }
     
-    let utf8Text, gbkText;
-    let utf8Score = -999, gbkScore = -999;
+    // 策略: 如果 UTF-8 序列较多则优先 UTF-8，否则 GBK
+    const preferGbk = possibleGbkPairCount > utf8SequenceCount * 2;
     
-    try {
-      utf8Text = new TextDecoder('UTF-8', {fatal: false}).decode(buf);
-      utf8Score = scoreText(utf8Text);
-    } catch {}
+    let utf8Text = null, gbkText = null;
+    try { utf8Text = new TextDecoder('UTF-8', {fatal: false}).decode(buf); } catch {}
+    try { gbkText = new TextDecoder('GBK', {fatal: false}).decode(buf); } catch {}
     
-    try {
-      gbkText = new TextDecoder('GBK', {fatal: false}).decode(buf);
-      gbkScore = scoreText(gbkText);
-    } catch {}
-    
-    console.log('UTF-8 score:', utf8Score, 'GBK score:', gbkScore);
-    
-    if (gbkScore > utf8Score && gbkText) {
-      return gbkText;
-    }
-    
-    if (utf8Text) {
-      return utf8Text;
-    }
-    
-    if (gbkText) {
-      return gbkText;
-    }
+    if (preferGbk && gbkText) return gbkText;
+    if (utf8Text) return utf8Text;
+    if (gbkText) return gbkText;
     
     throw new Error('无法解码文件');
   },
