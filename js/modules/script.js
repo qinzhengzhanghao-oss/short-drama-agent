@@ -162,5 +162,4 @@ const ScriptModule = {
       try { sessionStorage.setItem('_scriptFullText', fullText); } catch {}
     }
   }
-}
 };
