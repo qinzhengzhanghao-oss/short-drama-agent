@@ -360,7 +360,16 @@ const Utils = {
     // 真正的 TXT 文件：用 arrayBuffer + TextDecoder 读，精确控制编码
     const buf = await file.arrayBuffer();
     
-    // 尝试 UTF-8 解码
+    // 检测文件编码：尝试所有常见编码
+    // 1. UTF-16 (LE with BOM)
+    if (buf.byteLength >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
+      try { return new TextDecoder('UTF-16LE', {fatal: false}).decode(buf); } catch {}
+    }
+    if (buf.byteLength >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
+      try { return new TextDecoder('UTF-16BE', {fatal: false}).decode(buf); } catch {}
+    }
+    
+    // 2. UTF-8
     let utf8Text = '';
     let hasReplacement = false;
     try {
@@ -369,17 +378,24 @@ const Utils = {
     } catch { hasReplacement = true; }
     
     if (!hasReplacement) {
-      // UTF-8 正常解码，直接返回
       return utf8Text;
     }
     
-    // UTF-8 有乱码，尝试 GBK
+    // 3. GBK
     try {
       const gbkText = new TextDecoder('GBK', {fatal: false}).decode(buf);
-      return gbkText;
+      // 即使 GBK 解码了也要检查是否是合理的文本
+      const gbkReplacement = gbkText.includes('\uFFFD');
+      if (!gbkReplacement) {
+        return gbkText;
+      }
     } catch {}
     
-    // 都失败了，返回 UTF-8 的结果
+    // 4. Latin-1 (ISO-8859-1) — 兜底，这永远不会失败但结果不会有中文
+    try {
+      return new TextDecoder('ISO-8859-1', {fatal: false}).decode(buf);
+    } catch {}
+    
     return utf8Text;
   },
 
