@@ -259,6 +259,17 @@ const StoryboardModule = {
 - mood: 情绪
 - soundEffect: 音效
 - description: 画面描述（详细描述画面构图、人物位置、光影）
+- prompt: 完整的AI视频生成提示词，格式如下：
+  [景别] xxx
+  [焦点] xxx
+  [运镜] xxx
+  [场景] xxx
+  [人物] 角色名（动作、表情）
+  [台词] xxx
+  [独白] xxx
+  [情绪] xxx
+  [音效] xxx
+  [描述] 详细的画面描述，包括构图、人物位置、光影、色调等，50-100字
 
 规则：
 1. 每个镜头只表达一个完整的画面信息
@@ -345,7 +356,7 @@ ${text}
         mood: s.mood || '平静',
         soundEffect: s.soundEffect || '',
         description: s.description || '',
-        prompt: `[景别] ${s.sceneType || '中景'}\n[焦点] ${s.focus || ''}\n[运镜] ${s.camera || '固定镜头'}\n[场景] ${s.scene || ''}\n[人物] ${(s.characters || []).map(c => `${c.name}(${c.action || ''}, ${c.expression || ''})`).join('、')}\n[台词] ${s.dialogue || ''}\n[独白] ${s.monologue || ''}\n[情绪] ${s.mood || '平静'}\n[音效] ${s.soundEffect || ''}\n[描述] ${s.description || ''}`,
+        prompt: s.prompt || `[景别] ${s.sceneType || '中景'}\n[焦点] ${s.focus || ''}\n[运镜] ${s.camera || '固定镜头'}\n[场景] ${s.scene || ''}\n[人物] ${(s.characters || []).map(c => `${c.name}(${c.action || ''}, ${c.expression || ''})`).join('、')}\n[台词] ${s.dialogue || ''}\n[独白] ${s.monologue || ''}\n[情绪] ${s.mood || '平静'}\n[音效] ${s.soundEffect || ''}\n[描述] ${s.description || ''}`,
         approved: false,
         status: 'pending',
         note: '',
