@@ -396,6 +396,8 @@ ${text}
       if (allShots.length > 500) {
         allShots.length = 500;
       }
+      // 默认展开前5个镜头的提示词
+      allShots.slice(0, 5).forEach(s => { s._promptVisible = true; });
 
       App.state.storyboard = allShots;
       this._persist();
@@ -530,6 +532,8 @@ ${text}
     });
 
     if (allShots.length > 500) allShots.length = 500;
+    // 默认展开前5个镜头的提示词
+    allShots.slice(0, 5).forEach(s => { s._promptVisible = true; });
     App.state.storyboard = allShots;
     this._persist();
     App.renderStep();
@@ -717,11 +721,8 @@ ${text}
     const shot = App.state.storyboard[idx];
     if (!shot) return;
     shot._promptVisible = !shot._promptVisible;
-    // 不用full re-render，直接toggle显示
-    const el = document.getElementById(`promptArea_${idx}`);
-    if (el) {
-      el.style.display = shot._promptVisible ? 'block' : 'none';
-    }
+    this._persist();
+    App.renderStep();
   },
 
   _moveShot(idx, direction) {
