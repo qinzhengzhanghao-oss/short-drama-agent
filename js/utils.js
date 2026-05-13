@@ -227,18 +227,44 @@ const Utils = {
     }
 
     const xml = new TextDecoder('UTF-8').decode(xmlBytes);
-    const doc = new DOMParser().parseFromString(xml, 'text/xml');
-
-    // 提取所有段落
+    
+    // 方法1: 正则提取 <w:t> 标签内容（最可靠，不依赖DOMParser）
     const paragraphs = [];
-    const pEls = doc.getElementsByTagNameNS('*', 'p');
-    for (let pi = 0; pi < pEls.length; pi++) {
-      const tEls = pEls[pi].getElementsByTagNameNS('*', 't');
+    
+    // 按 </w:p> 切分段落后，再提取每个段落内的 w:t 文本
+    // 先提取所有段落原始XML
+    const pRegex = /<w:p[ >][\s\S]*?<\/w:p>/g;
+    let pMatch;
+    while ((pMatch = pRegex.exec(xml)) !== null) {
+      const pXml = pMatch[0];
+      // 提取这个段落里的所有 w:t 文本
+      const tRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+      let tMatch;
       let paraText = '';
-      for (let ti = 0; ti < tEls.length; ti++) {
-        paraText += tEls[ti].textContent || '';
+      while ((tMatch = tRegex.exec(pXml)) !== null) {
+        paraText += tMatch[1];
       }
-      if (paraText.trim()) paragraphs.push(paraText);
+      if (paraText.trim()) {
+        paragraphs.push(paraText);
+      }
+    }
+    
+    // 方法2: 如果方法1没取到（XML格式特殊），用 DOMParser 备份
+    if (paragraphs.length === 0) {
+      try {
+        const doc = new DOMParser().parseFromString(xml, 'text/xml');
+        const pEls = doc.getElementsByTagNameNS('*', 'p');
+        for (let pi = 0; pi < pEls.length; pi++) {
+          const tEls = pEls[pi].getElementsByTagNameNS('*', 't');
+          let paraText = '';
+          for (let ti = 0; ti < tEls.length; ti++) {
+            paraText += tEls[ti].textContent || '';
+          }
+          if (paraText.trim()) paragraphs.push(paraText);
+        }
+      } catch(e) {
+        // DOMParser 失败也没关系
+      }
     }
 
     return paragraphs.join('\n');
