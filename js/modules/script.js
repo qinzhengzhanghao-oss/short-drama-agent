@@ -132,8 +132,11 @@ const ScriptModule = {
       if (ext === 'txt') {
         text = await Utils.readFileAsText(file);
       } else if (ext === 'pdf') {
-        App.showNotification('PDF解析需要 PDF.js 库支持，当前以TXT模式处理。', 'warning');
+        App.showNotification('正在解析 PDF 文件...', 'info', 3000);
         text = await Utils.readFileAsText(file);
+        if (!text || text.trim().length === 0) {
+          App.showNotification('PDF 解析完成（内容为空）', 'warning', 2000);
+        }
       } else if (ext === 'docx' || ext === 'doc') {
         // docx/dox 是 ZIP 压缩包，需要用专用解析器
         App.showNotification('正在解析 DOCX 文件...', 'info', 2000);

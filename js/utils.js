@@ -533,12 +533,59 @@ const Utils = {
   },
 
   /**
+   * 从 PDF 中提取文本（使用 pdf.js）
+   * 需要先加载 pdf.js 库
+   */
+  async _extractPdfText(arrayBuffer) {
+    // 动态加载 pdf.js
+    if (!window.pdfjsLib) {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        script.onload = () => {
+          // 设置 worker
+          if (!window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          }
+          resolve();
+        };
+        script.onerror = () => reject(new Error('PDF.js 加载失败'));
+        document.head.appendChild(script);
+      });
+    }
+    
+    const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;
+    const totalPages = pdf.numPages;
+    const textChunks = [];
+    
+    for (let i = 1; i <= totalPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const pageText = content.items.map(item => item.str).join(' ');
+      textChunks.push(pageText);
+    }
+    
+    return textChunks.join('\n\n');
+  },
+
+  /**
    * 读取文件为文本（支持编码自动检测、docx/PDF/TXT，分段读取支持大文件）
    */
   readFileAsText(file) {
     return new Promise((resolve, reject) => {
       if (file.type === 'application/pdf') {
-        reject(new Error('PDF解析需要额外库支持'));
+        // PDF 走 ArrayBuffer 路径
+        const reader = new FileReader();
+        reader.onload = async (e) => {
+          try {
+            const text = await Utils._extractPdfText(e.target.result);
+            resolve(text);
+          } catch (err) {
+            reject(err);
+          }
+        };
+        reader.onerror = () => reject(new Error('PDF文件读取失败'));
+        reader.readAsArrayBuffer(file);
         return;
       }
 
