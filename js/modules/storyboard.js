@@ -237,8 +237,13 @@ const StoryboardModule = {
 
     App.showNotification('正在调用 AI 生成专业分镜...', 'info', 60000);
 
-    // 1. 从剧本中提取信息
-    const text = script.fullText.substring(0, 8000); // 取前8000字
+    // 1. 从剧本中提取信息。如果剧本较短（<30000字）直接全量发送；否则截断提示用户
+    const text = script.fullText.length <= 30000 
+      ? script.fullText 
+      : script.fullText.substring(0, 30000);
+    if (script.fullText.length > 30000) {
+      App.showNotification('剧本较长（' + Math.round(script.fullText.length/1000) + 'k），已取前30000字', 'warning', 5000);
+    }
     const entities = script.entities || [];
     const charNames = entities.filter(e => e.type === 'character').map(e => e.name).join('、');
     const sceneNames = entities.filter(e => e.type === 'scene').map(e => e.name).join('、');
@@ -287,7 +292,10 @@ ${text}
 角色列表：${charNames || '未知'}
 场景列表：${sceneNames || '未知'}
 
-请直接输出JSON数组，不要包含其他文字。`;
+请尽可能覆盖剧本中的所有场景和对话，生成完整的分镜脚本，不要遗漏任何段落。
+直接输出JSON数组，不要包含其他文字。
+
+注意：每1000字剧本大约对应8-15个镜头，请尽量完整生成。`;
 
     try {
       // 3. 调用 DeepSeek API
