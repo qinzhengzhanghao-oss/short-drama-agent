@@ -486,6 +486,7 @@ ${text}
         `【台词】${sc.dialogue || ''}，音色引用自${chars.map(c => c.name).join('、') || '角色'}`,
         `【音效】`
       ];
+
         approved: false,
         status: 'pending',
         note: '',
