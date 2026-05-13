@@ -400,7 +400,7 @@ ${text}
             { role: 'user', content: userPrompt }
           ],
           temperature: 0.8,
-          max_tokens: 16384
+          max_tokens: 32768
         })
       });
 
