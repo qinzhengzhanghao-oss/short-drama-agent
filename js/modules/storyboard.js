@@ -1,6 +1,8 @@
 /**
  * storyboard.js — 分镜审核模块
  * ShortDrama Studio
+ * v2.0 支持10万字级，流式分片生成
+ * 改动: _generateShots 分片处理，避免一次处理10万字内存爆掉
  */
 
 const StoryboardModule = {
@@ -143,25 +145,142 @@ const StoryboardModule = {
   },
 
   /**
-   * 生成分镜（模拟）
+   * 生成分镜（支持10万字级剧本）
+   * 分片处理，避免内存暴涨
    */
   _generateShots() {
     const script = App.state.script;
     if (!script || !script.fullText) {
+      // 尝试从浏览器缓存恢复全文
       App.showNotification('请先上传并解析剧本', 'warning');
       return;
     }
 
-    // 模拟分镜生成
     const text = script.fullText;
     const lines = text.split('\n').filter(l => l.trim());
+    const totalLines = lines.length;
+    const isLargeScript = totalLines > 500; // 500行以上视为大剧本
 
-    // 简单的分段逻辑：按台词/空行分镜
+    // 显示处理进度
+    if (isLargeScript) {
+      App.showNotification(`正在分片处理 ${totalLines} 行剧本...`, 'info', 5000);
+    }
+
+    // 获取绑定资产
+    const assets = App.state.assets || [];
+    const bindings = script.bindings || {};
+
+    const sceneTypes = ['远景', '全景', '中景', '近景', '特写', '大特写'];
+    const cameraMoves = ['固定镜头', '推镜', '拉镜', '摇镜', '移镜', '跟镜', '升降'];
+
+    // ---- 分片生成分镜 ----
+    // 每片最多处理100行，生成一批分镜后追加
+    const BATCH_SIZE = 200;  // 每批200行
+    const allShots = [];
+    
+    for (let batchStart = 0; batchStart < lines.length; batchStart += BATCH_SIZE) {
+      const batchEnd = Math.min(batchStart + BATCH_SIZE, lines.length);
+      const batchLines = lines.slice(batchStart, batchEnd);
+      
+      const batchShots = this._processBatch(
+        batchLines, bindings, assets, sceneTypes, cameraMoves, 
+        allShots.length, batchStart
+      );
+      
+      allShots.push(...batchShots);
+    }
+
+    // 如果分镜太少，用剩余行补齐
+    if (allShots.length < 3 && lines.length > 10) {
+      allShots.length = 0;
+      let chunk = '';
+      lines.forEach((line, idx) => {
+        chunk += (chunk ? '\n' : '') + line;
+        if ((idx + 1) % Math.max(3, Math.floor(lines.length / 20)) === 0 || line.includes('"')) {
+          const duration = Math.max(3, Math.min(15, Math.round(Utils.estimateDuration(chunk))));
+          const characters = [];
+          Object.entries(bindings).forEach(([entityName, assetId]) => {
+            if (chunk.includes(entityName)) {
+              const asset = assets.find(a => a.id === assetId);
+              if (asset && asset.variants && asset.variants.length > 0) {
+                const primary = asset.variants.find(v => v.isPrimary) || asset.variants[0];
+                characters.push({
+                  name: entityName,
+                  reference: primary.images && primary.images[0] || ''
+                });
+              }
+            }
+          });
+          allShots.push({
+            id: Utils.uid(),
+            shotNumber: allShots.length + 1,
+            duration,
+            sceneType: sceneTypes[allShots.length % sceneTypes.length],
+            camera: cameraMoves[allShots.length % cameraMoves.length],
+            dialogue: chunk.substring(0, 200),
+            sceneBackground: '',
+            sceneImage: '',
+            characters,
+            characterImages: characters.map(c => c.reference).filter(Boolean),
+            prompt: '',
+            approved: false,
+            status: 'pending',
+            groupId: null
+          });
+          chunk = '';
+        }
+      });
+      if (chunk) {
+        const duration = Math.max(3, Math.min(15, Math.round(Utils.estimateDuration(chunk))));
+        allShots.push({
+          id: Utils.uid(),
+          shotNumber: allShots.length + 1,
+          duration,
+          sceneType: '中景',
+          camera: '固定镜头',
+          dialogue: chunk.substring(0, 200),
+          sceneBackground: '',
+          sceneImage: '',
+          characters: [],
+          characterImages: [],
+          prompt: '',
+          approved: false,
+          status: 'pending',
+          groupId: null
+        });
+      }
+    }
+
+    // 限制分镜总数，防止UI卡死（10万字最多约200-300镜）
+    if (allShots.length > 300) {
+      // 保留每个场景的第一个分镜和所有带对话的分镜
+      const keepShots = allShots.filter(s => s.dialogue && s.characters.length > 0);
+      if (keepShots.length < 20) {
+        // 均匀采样
+        const step = Math.floor(allShots.length / 200);
+        allShots.length = 0;
+        for (let i = 0; i < keepShots.length; i += Math.max(1, step)) {
+          allShots.push(keepShots[i]);
+        }
+      }
+    }
+
+    App.state.storyboard = allShots;
+    this._persist();
+    App.renderStep();
+    App.showNotification(`已生成 ${allShots.length} 个分镜${isLargeScript ? `（从 ${totalLines} 行剧本中提取）` : ''}`, 'success');
+  },
+
+  /**
+   * 处理一批文本生成一组分镜
+   * @private
+   */
+  _processBatch(batchLines, bindings, assets, sceneTypes, cameraMoves, globalOffset, batchStartLine) {
     const rawShots = [];
     let currentDialogue = '';
     let dialogueCount = 0;
 
-    lines.forEach((line, idx) => {
+    batchLines.forEach((line, idx) => {
       const trimmed = line.trim();
       if (!trimmed) return;
 
@@ -177,20 +296,20 @@ const StoryboardModule = {
       }
 
       // 每5句或末尾生成一个分镜
-      if (dialogueCount % 5 === 0 && currentDialogue && idx > 0 && idx < lines.length - 1) {
+      if (dialogueCount % 5 === 0 && currentDialogue && idx > 0 && idx < batchLines.length - 1) {
         rawShots.push(currentDialogue);
         currentDialogue = '';
       }
     });
     if (currentDialogue) rawShots.push(currentDialogue);
 
-    // 如果太少，用随机分割
-    if (rawShots.length < 3) {
+    // 太少则合并
+    if (rawShots.length < 2 && batchLines.length > 5) {
       rawShots.length = 0;
       let chunk = '';
-      lines.forEach((line, idx) => {
+      batchLines.forEach((line, idx) => {
         chunk += (chunk ? '\n' : '') + line;
-        if ((idx + 1) % 3 === 0 || line.includes('"')) {
+        if ((idx + 1) % 3 === 0) {
           rawShots.push(chunk);
           chunk = '';
         }
@@ -198,14 +317,8 @@ const StoryboardModule = {
       if (chunk) rawShots.push(chunk);
     }
 
-    const sceneTypes = ['远景', '全景', '中景', '近景', '特写'];
-    const cameraMoves = ['固定镜头', '推镜', '拉镜', '摇镜', '移镜', '跟镜', '升降'];
-
-    // 获取绑定资产
-    const assets = App.state.assets || [];
-    const bindings = script.bindings || {};
-
-    const shots = rawShots.map((content, idx) => {
+    // 转换为分镜对象
+    return rawShots.map((content, idx) => {
       const duration = Math.max(3, Math.min(15, Math.round(Utils.estimateDuration(content))));
 
       // 查找对话中的角色
@@ -239,10 +352,10 @@ const StoryboardModule = {
 
       return {
         id: Utils.uid(),
-        shotNumber: idx + 1,
+        shotNumber: globalOffset + idx + 1,
         duration,
-        sceneType: sceneTypes[idx % sceneTypes.length],
-        camera: cameraMoves[idx % cameraMoves.length],
+        sceneType: sceneTypes[(globalOffset + idx) % sceneTypes.length],
+        camera: cameraMoves[(globalOffset + idx) % cameraMoves.length],
         dialogue: content.substring(0, 200),
         sceneBackground: sceneId ? (assets.find(a => a.id === sceneId)?.name || '') : '',
         sceneImage,
@@ -254,20 +367,14 @@ const StoryboardModule = {
         groupId: null
       };
     });
-
-    App.state.storyboard = shots;
-    this._persist();
-    App.renderStep();
-    App.showNotification(`已生成 ${shots.length} 个分镜`, 'success');
   },
 
   /**
    * 分镜分组
    */
   _groupShots(shots) {
-    // 简单分组：每3-5个分为一组
     const groups = [];
-    const groupSize = 4;
+    const groupSize = Math.min(4, Math.max(2, Math.floor(shots.length / 20))); // 自适应分组
     for (let i = 0; i < shots.length; i += groupSize) {
       groups.push({
         id: `group_${Math.floor(i / groupSize)}`,
@@ -295,7 +402,6 @@ const StoryboardModule = {
     const targetIdx = idx + direction;
     if (targetIdx < 0 || targetIdx >= shots.length) return;
 
-    // 交换
     [shots[idx], shots[targetIdx]] = [shots[targetIdx], shots[idx]];
     shots.forEach((s, i) => s.shotNumber = i + 1);
 

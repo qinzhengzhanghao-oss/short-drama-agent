@@ -1,6 +1,7 @@
 /**
  * app.js — 应用核心：路由/状态管理
  * ShortDrama Studio
+ * v2.0 持久化时自动剥离大文本，避免 localStorage 爆配额
  */
 
 const App = {
@@ -8,15 +9,15 @@ const App = {
    * 应用状态
    */
   state: {
-    currentStep: 1,          // 当前步骤 1-6
-    project: null,           // 当前项目
-    projects: [],            // 项目列表
-    assets: [],              // 资产列表
-    script: null,            // 剧本数据
-    storyboard: [],          // 分镜列表
-    promptGroups: [],        // 提示词组
-    generationTasks: [],     // 生成任务
-    settings: {},            // 下载偏好设置
+    currentStep: 1,
+    project: null,
+    projects: [],
+    assets: [],
+    script: null,
+    storyboard: [],
+    promptGroups: [],
+    generationTasks: [],
+    settings: {},
     _showNewProjectForm: false,
     _expandedAsset: null
   },
@@ -51,14 +52,12 @@ const App = {
    * 初始化应用
    */
   init() {
-    // 从localStorage恢复状态
     this._restore();
     this._renderNavigation();
     this.renderStep();
     this._updateProgressBar();
     this._updateButtons();
 
-    // 注册快捷键
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         this.closeConfirm();
@@ -118,7 +117,6 @@ const App = {
   navigateTo(step) {
     if (step < 1 || step > 6) return;
 
-    // 检查是否可以跳转到目标步骤
     if (!this.canProceedTo(step)) return;
 
     this.state.currentStep = step;
@@ -136,13 +134,11 @@ const App = {
     const step = this.steps.find(s => s.id === this.state.currentStep);
     if (!step) return;
 
-    // 更新标题
     const titleEl = document.getElementById('stepTitle');
     if (titleEl) {
       titleEl.textContent = `${step.icon} ${step.name}`;
     }
 
-    // 渲染内容
     const body = document.getElementById('contentBody');
     if (!body) return;
 
@@ -150,7 +146,6 @@ const App = {
     if (module && typeof module.render === 'function') {
       body.innerHTML = module.render();
 
-      // 如果是资产管理步骤，运行校验渲染
       if (step.component === 'assets' && AssetsModule.renderValidation) {
         setTimeout(() => AssetsModule.renderValidation(), 100);
       }
@@ -168,7 +163,6 @@ const App = {
     const currentStep = this.state.currentStep;
     const module = this.modules[this.steps.find(s => s.id === currentStep).component];
 
-    // 校验当前步骤是否可以继续
     if (module && typeof module.canProceed === 'function') {
       if (!module.canProceed()) {
         const stepNames = {
@@ -200,7 +194,6 @@ const App = {
 
   /**
    * 校验是否可以跳转到目标步骤
-   * 确保前面的步骤都已完成
    */
   canProceedTo(targetStep) {
     if (targetStep <= this.state.currentStep) return true;
@@ -312,28 +305,33 @@ const App = {
   },
 
   /**
-   * 持久化状态到localStorage
+   * 持久化状态到localStorage（自动剥离大文本）
    */
   _persist() {
+    // 保存剧本全文的内存引用
+    const fullTextBackup = this.state.script ? this.state.script.fullText : null;
+    const previewBackup = this.state.script ? this.state.script.preview : null;
+
+    // 构建持久化数据（剥离大文本）
     const data = {
       currentStep: this.state.currentStep,
       project: this.state.project,
       projects: this.state.projects,
       assets: this.state.assets,
-      script: this.state.script,
+      script: this.state.script ? Utils.stripScriptForPersist(this.state.script) : null,
       storyboard: this.state.storyboard,
       promptGroups: this.state.promptGroups,
       generationTasks: this.state.generationTasks,
       settings: this.state.settings
     };
 
-    // 保存当前项目进度
+    // 保存当前项目进度时也剥离剧本文本
     if (this.state.project) {
       const project = this.state.projects.find(p => p.id === this.state.project.id);
       if (project) {
         project.lastStep = this.state.currentStep;
         project.assets = this.state.assets;
-        project.script = this.state.script;
+        project.script = this.state.script ? Utils.stripScriptForPersist(this.state.script) : null;
         project.storyboard = this.state.storyboard;
         project.promptGroups = this.state.promptGroups;
         project.generationTasks = this.state.generationTasks;
@@ -342,11 +340,18 @@ const App = {
       }
     }
 
+    // 写入 localStorage
     Utils.storage.set('app_state', data);
+
+    // 恢复剧本全文到内存（不会丢）
+    if (this.state.script && fullTextBackup) {
+      this.state.script.fullText = fullTextBackup;
+      this.state.script.preview = previewBackup;
+    }
   },
 
   /**
-   * 从localStorage恢复状态
+   * 从localStorage恢复状态（还原全文引用标记）
    */
   _restore() {
     const data = Utils.storage.get('app_state');
@@ -355,11 +360,23 @@ const App = {
       this.state.project = data.project || null;
       this.state.projects = data.projects || [];
       this.state.assets = data.assets || [];
-      this.state.script = data.script || null;
       this.state.storyboard = data.storyboard || [];
       this.state.promptGroups = data.promptGroups || [];
       this.state.generationTasks = data.generationTasks || [];
       this.state.settings = data.settings || {};
+
+      // 恢复脚本（不含全文，标记需要重新上传）
+      if (data.script) {
+        this.state.script = {
+          ...data.script,
+          fullText: '',    // 全文不会持久化
+          _needsReload: data.script._hasFullText === true
+        };
+        // 如果以前上传过且有meta数据但没有全文，显示提示
+        if (this.state.script._needsReload) {
+          console.log('Script metadata restored, full text needs reload');
+        }
+      }
     }
 
     // 恢复API key
