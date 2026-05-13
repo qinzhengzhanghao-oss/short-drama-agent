@@ -357,18 +357,30 @@ const Utils = {
       return await Utils._extractPdfText(buf);
     }
     
-    // 真正的 TXT 文件
-    const text = await file.text();
+    // 真正的 TXT 文件：用 arrayBuffer + TextDecoder 读，精确控制编码
+    const buf = await file.arrayBuffer();
     
-    // 检查是否有乱码字符
-    if (text.includes('\uFFFD')) {
-      try {
-        const buf = await file.arrayBuffer();
-        return new TextDecoder('GBK', {fatal: false}).decode(buf);
-      } catch {}
+    // 尝试 UTF-8 解码
+    let utf8Text = '';
+    let hasReplacement = false;
+    try {
+      utf8Text = new TextDecoder('UTF-8', {fatal: false}).decode(buf);
+      hasReplacement = utf8Text.includes('\uFFFD');
+    } catch { hasReplacement = true; }
+    
+    if (!hasReplacement) {
+      // UTF-8 正常解码，直接返回
+      return utf8Text;
     }
     
-    return text;
+    // UTF-8 有乱码，尝试 GBK
+    try {
+      const gbkText = new TextDecoder('GBK', {fatal: false}).decode(buf);
+      return gbkText;
+    } catch {}
+    
+    // 都失败了，返回 UTF-8 的结果
+    return utf8Text;
   },
 
   readFileAsDataURL(file) {
