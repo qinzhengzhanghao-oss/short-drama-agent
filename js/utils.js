@@ -357,46 +357,46 @@ const Utils = {
       return await Utils._extractPdfText(buf);
     }
     
-    // 真正的 TXT 文件：用 arrayBuffer + TextDecoder 读，精确控制编码
+    // 真正的 TXT 文件：用 arrayBuffer + TextDecoder，尝试所有常见编码
     const buf = await file.arrayBuffer();
+    const first16 = new Uint8Array(buf.slice(0, Math.min(buf.byteLength, 16)));
+    const hexBytes = Array.from(first16).map(b => b.toString(16).padStart(2,'0')).join(' ');
+    console.log('File magic bytes:', hexBytes);
     
-    // 检测文件编码：尝试所有常见编码
-    // 1. UTF-16 (LE with BOM)
-    if (buf.byteLength >= 2 && buf[0] === 0xFF && buf[1] === 0xFE) {
-      try { return new TextDecoder('UTF-16LE', {fatal: false}).decode(buf); } catch {}
+    // 尝试顺序：UTF-8 -> GBK -> UTF-16LE -> UTF-16BE -> Latin-1
+    // 选择中文字符最多的那个结果
+    const candidates = [];
+    
+    const testEncodings = ['UTF-8', 'GBK', 'UTF-16LE', 'UTF-16BE', 'ISO-8859-1', 'Shift_JIS', 'EUC-KR', 'Big5'];
+    
+    for (const enc of testEncodings) {
+      try {
+        const decoded = new TextDecoder(enc, {fatal: false}).decode(buf);
+        // 统计中文字符
+        let chineseCount = 0;
+        let replacementCount = 0;
+        for (let i = 0; i < Math.min(decoded.length, 2000); i++) {
+          const code = decoded.charCodeAt(i);
+          if (code >= 0x4e00 && code <= 0x9fff) chineseCount++;
+          if (code === 0xFFFD) replacementCount++;
+        }
+        candidates.push({ enc, chineseCount, replacementCount, text: decoded });
+      } catch {}
     }
-    if (buf.byteLength >= 2 && buf[0] === 0xFE && buf[1] === 0xFF) {
-      try { return new TextDecoder('UTF-16BE', {fatal: false}).decode(buf); } catch {}
+    
+    // 排序：中文字符最多且替换字符最少的
+    candidates.sort((a, b) => {
+      if (b.chineseCount !== a.chineseCount) return b.chineseCount - a.chineseCount;
+      return a.replacementCount - b.replacementCount;
+    });
+    
+    if (candidates.length > 0) {
+      const best = candidates[0];
+      console.log('Best encoding:', best.enc, 'Chinese chars:', best.chineseCount, 'Replacements:', best.replacementCount);
+      return best.text;
     }
     
-    // 2. UTF-8
-    let utf8Text = '';
-    let hasReplacement = false;
-    try {
-      utf8Text = new TextDecoder('UTF-8', {fatal: false}).decode(buf);
-      hasReplacement = utf8Text.includes('\uFFFD');
-    } catch { hasReplacement = true; }
-    
-    if (!hasReplacement) {
-      return utf8Text;
-    }
-    
-    // 3. GBK
-    try {
-      const gbkText = new TextDecoder('GBK', {fatal: false}).decode(buf);
-      // 即使 GBK 解码了也要检查是否是合理的文本
-      const gbkReplacement = gbkText.includes('\uFFFD');
-      if (!gbkReplacement) {
-        return gbkText;
-      }
-    } catch {}
-    
-    // 4. Latin-1 (ISO-8859-1) — 兜底，这永远不会失败但结果不会有中文
-    try {
-      return new TextDecoder('ISO-8859-1', {fatal: false}).decode(buf);
-    } catch {}
-    
-    return utf8Text;
+    throw new Error('无法解码文件，请确认文件编码为 UTF-8 或 GBK');
   },
 
   readFileAsDataURL(file) {
