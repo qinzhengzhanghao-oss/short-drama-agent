@@ -146,11 +146,14 @@ const StoryboardModule = {
             </div>
           ` : ''}
           
-          ${shot.prompt ? `
-            <div style="margin-top:6px;padding:6px;background:rgba(139,92,246,0.08);border-radius:6px;font-size:10px;line-height:1.6;color:var(--text-muted);white-space:pre-wrap;font-family:monospace;">
-              ${this._escapeHtml(shot.prompt)}
+          <div style="margin-top:8px;">
+            <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;cursor:pointer;" onclick="StoryboardModule._togglePrompt(${idx})">
+              📝 提示词 ${shot._promptVisible ? '▲' : '▶'}
             </div>
-          ` : ''}
+            <div id="promptArea_${idx}" style="${shot._promptVisible ? 'display:block' : 'display:none'};padding:8px;background:rgba(139,92,246,0.06);border:1px solid rgba(139,92,246,0.15);border-radius:6px;font-size:11px;line-height:1.8;color:var(--text-primary);white-space:pre-wrap;font-family:monospace;max-height:400px;overflow-y:auto;">
+              ${shot.prompt ? this._escapeHtml(shot.prompt) : '<span style="color:var(--text-muted);">无提示词</span>'}
+            </div>
+          </div>
 
           <!-- 编辑对话 -->
           <div style="margin-top:4px;font-size:11px;">
@@ -364,7 +367,7 @@ ${text}
         mood: s.mood || '平静',
         soundEffect: s.soundEffect || '',
         description: s.description || '',
-        prompt: s.prompt || `[景别] ${s.sceneType || '中景'}\n[焦点] ${s.focus || ''}\n[运镜] ${s.camera || '固定镜头'}\n[场景] ${s.scene || ''}\n[人物] ${(s.characters || []).map(c => `${c.name}(${c.action || ''}, ${c.expression || ''})`).join('、')}\n[台词] ${s.dialogue || ''}\n[独白] ${s.monologue || ''}\n[情绪] ${s.mood || '平静'}\n[音效] ${s.soundEffect || ''}\n[描述] ${s.description || ''}`,
+        prompt: s.prompt || `【场景】${s.scene || ''}\n【角色】${(s.characters || []).map(c => c.name).join('、') || ''}\n【景别】${s.sceneType || '中景'}\n【镜头角度】平拍\n【镜头时长】${s.duration || 5}秒\n【焦点】${s.focus || ''}\n【画面】${s.description || ''}\n【动作】预备→过程→终点\n【表情控制】${s.expression || ''}\n【面部微动作】\n【镜头运动】${s.camera || '固定镜头'}\n【台词】${s.dialogue || ''}，音色引用自${(s.characters || []).map(c => c.name).join('、') || '角色'}\n【音效】${s.soundEffect || ''}`,
         approved: false,
         status: 'pending',
         note: '',
@@ -469,32 +472,20 @@ ${text}
       });
 
       const promptParts = [
-        `[景别] ${sceneType}`,
-        `[运镜] ${camera}`,
-        `[场景] ${sc.scene || '默认场景'}`,
-        `[动作] ${sc.action || '无'}`,
-        `[台词] ${sc.dialogue || '无'}`,
-        `[情绪] ${mood}`
+        `【场景】${sc.scene || '默认场景'}`,
+        `【角色】${chars.map(c => c.name).join('、') || ''}`,
+        `【景别】${sceneType}`,
+        `【镜头角度】平拍`,
+        `【镜头时长】${sc.duration || 5}秒`,
+        `【焦点】${'人物'}`,
+        `【画面】${sc.text || ''}`,
+        `【动作】预备→过程→终点`,
+        `【表情控制】`,
+        `【面部微动作】`,
+        `【镜头运动】${camera}`,
+        `【台词】${sc.dialogue || ''}，音色引用自${chars.map(c => c.name).join('、') || '角色'}`,
+        `【音效】`
       ];
-
-      allShots[idx] = {
-        id: Utils.uid(),
-        shotNumber: idx + 1,
-        duration: sc.duration || 3,
-        sceneType: sceneType,
-        focus: '',
-        camera: camera,
-        dialogue: (sc.text || '').substring(0, 200),
-        monologue: '',
-        sceneBackground: sc.scene || '',
-        sceneImage: '',
-        characters: chars.length > 0 ? chars : [{name:'',action:'',expression:'',reference:'',assetId:''}],
-        sceneAssetId: '',
-        props: [],
-        mood: mood,
-        soundEffect: '',
-        description: sc.text || '',
-        prompt: promptParts.join('\n'),
         approved: false,
         status: 'pending',
         note: '',
@@ -660,7 +651,7 @@ ${text}
       mood: '平静',
       soundEffect: '',
       description: '',
-      prompt: `[景别] 中景\n[运镜] 固定镜头\n[场景] \n[动作] ${dialogue.trim().substring(0, 80)}\n[台词] \n[情绪] 平静`,
+      prompt: `【场景】\n【角色】\n【景别】中景\n【镜头角度】平拍\n【镜头时长】5秒\n【焦点】\n【画面】${dialogue.trim().substring(0, 80)}\n【动作】预备→过程→终点\n【表情控制】\n【面部微动作】\n【镜头运动】固定镜头\n【台词】\n【音效】`,
       approved: false,
       status: 'pending',
       note: '',
@@ -684,6 +675,17 @@ ${text}
   _toggleGroup(index) {
     const body = document.getElementById(`groupBody${index}`);
     if (body) body.classList.toggle('open');
+  },
+
+  _togglePrompt(idx) {
+    const shot = App.state.storyboard[idx];
+    if (!shot) return;
+    shot._promptVisible = !shot._promptVisible;
+    // 不用full re-render，直接toggle显示
+    const el = document.getElementById(`promptArea_${idx}`);
+    if (el) {
+      el.style.display = shot._promptVisible ? 'block' : 'none';
+    }
   },
 
   _moveShot(idx, direction) {
