@@ -340,7 +340,200 @@ const Utils = {
   },
 
   /**
-   * 读取文件为文本（支持编码自动检测，分段读取支持大文件）
+   * 极简 docx 文本提取器（不依赖外部库，仅提取 word/document.xml 中的文本）
+   * docx 文件是 ZIP 压缩包，我们手动解析 ZIP 格式来提取文本
+   */
+  _extractDocxText(arrayBuffer) {
+    // ZIP 文件局部文件头签名
+    const LOCAL_SIG = 0x04034b50;
+    const CENTRAL_SIG = 0x02014b50;
+    const END_SIG = 0x06054b50;
+    
+    const u8 = new Uint8Array(arrayBuffer);
+    const view = new DataView(arrayBuffer);
+    
+    // 读取 uint16
+    function readU16(offset) { return view.getUint16(offset, true); }
+    function readU32(offset) { return view.getUint32(offset, true); }
+    
+    let offset = 0;
+    const entries = [];
+    
+    // 扫描所有局部文件头
+    while (offset + 30 <= u8.length) {
+      if (readU32(offset) !== LOCAL_SIG) {
+        // 不是文件头，尝试按字节跳过（应对有数据描述符的情况）
+        offset++;
+        if (offset > u8.length - 4) break;
+        continue;
+      }
+      
+      const compression = readU16(offset + 8);
+      const fileNameLen = readU16(offset + 26);
+      const extraLen = readU16(offset + 28);
+      const nameEnd = offset + 30 + fileNameLen;
+      
+      let fileName = '';
+      for (let i = 0; i < fileNameLen; i++) {
+        fileName += String.fromCharCode(u8[offset + 30 + i]);
+      }
+      
+      const dataOffset = nameEnd + extraLen;
+      
+      // 计算压缩数据大小
+      const compressedSize = readU32(offset + 18);
+      const uncompressedSize = readU32(offset + 22);
+      
+      entries.push({
+        fileName,
+        compression,
+        dataOffset,
+        compressedSize,
+        uncompressedSize
+      });
+      
+      // 跳到下一个文件头
+      offset = dataOffset + compressedSize;
+    }
+    
+    // 找 word/document.xml
+    const entry = entries.find(e => 
+      e.fileName === 'word/document.xml' || e.fileName.startsWith('word/document.xml')
+    );
+    if (!entry) {
+      throw new Error('无法找到文档内容（word/document.xml）');
+    }
+    
+    // 提取并解压数据
+    let xmlBytes;
+    if (entry.compression === 0) {
+      // 未压缩
+      xmlBytes = u8.slice(entry.dataOffset, entry.dataOffset + entry.compressedSize);
+    } else if (entry.compression === 8) {
+      // Deflate 压缩 — 使用 Compression Streams API 或 DecompressionStream
+      const compressed = u8.slice(entry.dataOffset, entry.dataOffset + entry.compressedSize);
+      xmlBytes = this._inflate(compressed, entry.uncompressedSize);
+    } else {
+      throw new Error(`不支持的压缩方式: ${entry.compression}`);
+    }
+    
+    // 用 TextDecoder 解码 XML
+    const decoder = new TextDecoder('UTF-8');
+    let xml = decoder.decode(xmlBytes);
+    
+    // 从 XML 中提取文本
+    // <w:t>xxx</w:t> 标签内的就是文本内容
+    const textParts = [];
+    const tagRegex = /<w:t[^>]*>([^<]*)<\/w:t>/g;
+    let match;
+    while ((match = tagRegex.exec(xml)) !== null) {
+      textParts.push(match[1]);
+    }
+    
+    // 段落换行：<w:p> 代表换行
+    // 简单处理：遇到 </w:p> 后加换行符
+    const paraRegex = /<w:p[ >]/g;
+    let paraMatch;
+    while ((paraMatch = paraRegex.exec(xml)) !== null) {
+      // 在文本中标记位置
+    }
+    
+    // 更准确的方法：按段落提取
+    const fullText = [];
+    let currentPara = [];
+    let inPara = false;
+    let inText = false;
+    let currentText = '';
+    
+    // 简易 XML 解析（只针对 docx 的 w:p/w:r/w:t 结构）
+    let tagName = '';
+    let isClosing = false;
+    let readingContent = false;
+    
+    for (let i = 0; i < xml.length; i++) {
+      const ch = xml[i];
+      
+      if (ch === '<') {
+        if (currentText && tagName === 'w:t') {
+          textParts.push(currentText.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
+        }
+        currentText = '';
+        tagName = '';
+        isClosing = false;
+        readingContent = true;
+      } else if (ch === '>') {
+        if (tagName) {
+          if (tagName === '/w:p') {
+            fullText.push(textParts.join(''));
+            textParts.length = 0;
+          } else if (tagName === 'w:p') {
+            // 开始新段落
+          }
+        }
+        readingContent = false;
+        tagName = '';
+      } else if (readingContent) {
+        if (ch === '/') isClosing = true;
+        else if (isClosing) tagName += ch;
+        else tagName += ch;
+      } else if (!readingContent) {
+        currentText += ch;
+      }
+    }
+    
+    // 追加最后一段
+    if (textParts.length > 0) {
+      fullText.push(textParts.join(''));
+    }
+    
+    return fullText.join('\n');
+  },
+  
+  /**
+   * 解压 Deflate 数据
+   * 使用浏览器内置的 DecompressionStream（Chrome 80+、Firefox 113+）
+   */
+  _inflate(compressed, uncompressedSize) {
+    // 尝试使用 DecompressionStream
+    if (typeof DecompressionStream !== 'undefined') {
+      try {
+        const ds = new DecompressionStream('deflate-raw');
+        const writer = ds.writable.getWriter();
+        writer.write(compressed);
+        writer.close();
+        const reader = ds.readable.getReader();
+        const chunks = [];
+        return new Promise((resolve) => {
+          function pump() {
+            reader.read().then(({done, value}) => {
+              if (done) {
+                const total = chunks.reduce((s, c) => {
+                  const a = new Uint8Array(s.byteLength + c.byteLength);
+                  a.set(new Uint8Array(s), 0);
+                  a.set(new Uint8Array(c), s.byteLength);
+                  return a;
+                }, new Uint8Array(0));
+                resolve(total);
+              } else {
+                chunks.push(value);
+                pump();
+              }
+            });
+          }
+          pump();
+        });
+      } catch (e) {
+        // fallback 到同步方式
+      }
+    }
+    
+    // fallback: 使用 pako-like 的简单 inflate（极小实现）
+    // 由于浏览器限制，这里抛错提示用户
+    throw new Error('当前浏览器不支持 docx 解压，请将文档另存为 TXT 格式上传');
+  },
+
+  /**
+   * 读取文件为文本（支持编码自动检测、docx/PDF/TXT，分段读取支持大文件）
    */
   readFileAsText(file) {
     return new Promise((resolve, reject) => {

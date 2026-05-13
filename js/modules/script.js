@@ -128,13 +128,25 @@ const ScriptModule = {
     try {
       let text;
 
-      // 读取文件（utils已支持大文件分段读取）
+      // 根据文件类型选择不同的读取方式
       if (ext === 'txt') {
         text = await Utils.readFileAsText(file);
       } else if (ext === 'pdf') {
         App.showNotification('PDF解析需要 PDF.js 库支持，当前以TXT模式处理。', 'warning');
         text = await Utils.readFileAsText(file);
+      } else if (ext === 'docx' || ext === 'doc') {
+        // docx/dox 是 ZIP 压缩包，需要用专用解析器
+        App.showNotification('正在解析 DOCX 文件...', 'info', 2000);
+        const arrayBuffer = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(e.target.result);
+          reader.onerror = () => reject(new Error('文件读取失败'));
+          reader.readAsArrayBuffer(file);
+        });
+        text = Utils._extractDocxText(arrayBuffer);
+        App.showNotification('DOCX 解析完成', 'success', 1500);
       } else {
+        // fallback
         text = await Utils.readFileAsText(file);
       }
 
