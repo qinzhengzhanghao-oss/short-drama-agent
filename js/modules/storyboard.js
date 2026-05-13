@@ -114,7 +114,7 @@ const StoryboardModule = {
                 ${shot.dialogue ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;">${this._escapeHtml(shot.dialogue.substring(0,40))}</span>` : ''}
               </div>
             </div>
-            <div class="shot-actions" style="flex-direction:column;gap:4px;">
+            <div class="shot-actions" style="flex-direction:row;gap:4px;align-items:center;">
               <button class="btn-icon" title="取消通过" onclick="StoryboardModule._setShotStatus(${idx}, 'pending')" style="color:var(--brand-green);">↩</button>
             </div>
           </div>
@@ -209,7 +209,7 @@ const StoryboardModule = {
             </div>
           ` : ''}
         </div>
-        <div class="shot-actions" style="flex-direction:column;gap:4px;">
+        <div class="shot-actions" style="flex-direction:row;gap:2px;align-items:center;flex-wrap:wrap;">
           <button class="btn-icon" onclick="StoryboardModule._moveShot(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>↑</button>
           <button class="btn-icon" onclick="StoryboardModule._moveShot(${idx}, 1)" ${idx === App.state.storyboard.length - 1 ? 'disabled' : ''}>↓</button>
           <button class="btn-icon" onclick="StoryboardModule._setShotStatus(${idx}, 'approved')" style="color:var(--brand-green);font-size:16px;" title="通过">👍</button>
