@@ -1,12 +1,15 @@
 /**
  * storyboard.js — 分镜审核模块
  * ShortDrama Studio v2.0
- * 改动: 每个分镜卡片内绑定角色/场景/道具
+ * 改动: 每个分镜可单独通过/驳回，无需全部审核即可进入下一步
  */
 
 const StoryboardModule = {
   render() {
     const shots = App.state.storyboard || [];
+    const pending = shots.filter(s => s.status === 'pending').length;
+    const passed = shots.filter(s => s.status === 'approved').length;
+    const rejected = shots.filter(s => s.status === 'rejected').length;
 
     let html = `
       <div class="card" style="margin-bottom:20px;">
@@ -14,7 +17,9 @@ const StoryboardModule = {
           <div>
             <div class="card-title">🎬 分镜审核</div>
             <div class="card-subtitle">
-              ${shots.length > 0 ? `共 ${shots.length} 个镜头` : '暂未生成分镜'}
+              ${shots.length > 0 
+                ? `共 ${shots.length} 个镜头（🟡${pending} 待审 ✅${passed} 通过 ❌${rejected} 需修改）`
+                : '暂未生成分镜'}
             </div>
           </div>
           <div style="display:flex;gap:8px;">
@@ -38,19 +43,21 @@ const StoryboardModule = {
       let groupIndex = 0;
 
       html += `
-        <div style="margin-bottom:16px;display:flex;align-items:center;gap:12px;">
+        <div style="margin-bottom:16px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-success btn-sm" onclick="StoryboardModule._approveAll()">
-            ✅ 全部审核通过
+            ✅ 全部通过
           </button>
-          <span style="font-size:13px;color:var(--text-muted);">
-            ${shots.filter(s => s.approved).length}/${shots.length} 已审核
-          </span>
+          <button class="btn btn-outline btn-sm" onclick="StoryboardModule._rejectAllPending()">
+            ❌ 全部退回待审
+          </button>
+          <span style="font-size:13px;color:var(--text-muted);">${passed}/${shots.length} 已通过</span>
         </div>
         <div class="storyboard-list">
       `;
 
       groups.forEach(group => {
         groupIndex++;
+        const groupPassed = group.shots.filter(s => s.status === 'approved').length;
         const totalDuration = group.shots.reduce((sum, s) => sum + (s.duration || 5), 0);
         html += `
           <div class="group-panel">
@@ -58,8 +65,8 @@ const StoryboardModule = {
                  onclick="StoryboardModule._toggleGroup(${groupIndex})">
               <div class="group-title">
                 <span>📋 编组 #${groupIndex}</span>
-                <span class="badge ${totalDuration > 120 ? 'badge-red' : 'badge-purple'}">
-                  ${totalDuration > 120 ? '⚠️ 超时' : '正常'}
+                <span class="badge ${groupPassed === group.shots.length ? 'badge-green' : 'badge-purple'}">
+                  ${groupPassed}/${group.shots.length} 通过
                 </span>
               </div>
               <div class="group-meta">
@@ -80,27 +87,75 @@ const StoryboardModule = {
   },
 
   _renderShotCard(shot, idx) {
-    const statusIcon = shot.approved ? '✅' : shot.status === 'rejected' ? '❌' : '⏳';
+    const isApproved = shot.status === 'approved';
+    const isRejected = shot.status === 'rejected';
+    const isPending = !isApproved && !isRejected;
+    
+    const statusIcon = isApproved ? '✅' : isRejected ? '❌' : '🟡';
+    const statusLabel = isApproved ? '已通过' : isRejected ? '需修改' : '待审核';
+    const cardOpacity = isApproved ? '0.7' : '1';
+    const cardBorder = isApproved ? 'rgba(29,185,84,0.3)' : isRejected ? 'rgba(239,68,68,0.3)' : 'var(--border-default)';
+    
     const assets = App.state.assets || [];
     const charAssets = assets.filter(a => a.type === 'character');
     const sceneAssets = assets.filter(a => a.type === 'scene');
 
+    // 如果已通过，折叠显示
+    if (isApproved) {
+      return `
+        <div class="shot-card shot-approved">
+          <div class="shot-number">${shot.shotNumber || idx + 1}</div>
+          <div class="shot-content">
+            <div class="shot-meta">
+              <span class="shot-meta-item">⏱ ${shot.duration || 5}s</span>
+              <span class="shot-meta-item">✅ 已通过</span>
+              ${shot.dialogue ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;">${this._escapeHtml(shot.dialogue.substring(0,40))}</span>` : ''}
+            </div>
+          </div>
+          <div class="shot-actions" style="flex-direction:column;gap:4px;">
+            <button class="btn-icon" title="取消通过" onclick="StoryboardModule._setShotStatus(${idx}, 'pending')" style="color:var(--brand-green);">↩</button>
+          </div>
+        </div>
+      `;
+    }
+
     return `
-      <div class="shot-card" style="opacity:${shot.approved ? '1' : '0.85'};border-color:${shot.approved ? 'rgba(29,185,84,0.3)' : 'var(--border-default)'}">
+      <div class="shot-card" style="opacity:${cardOpacity};border-color:${cardBorder}">
         <div class="shot-number">${shot.shotNumber || idx + 1}</div>
         <div class="shot-content">
           <div class="shot-meta">
             <span class="shot-meta-item">⏱ ${shot.duration || 5}s</span>
-            <span class="shot-meta-item">${statusIcon}</span>
+            <span class="shot-meta-item">${statusIcon} ${statusLabel}</span>
+            ${shot.note ? `<span style="font-size:11px;color:#EF4444;margin-left:8px;">📝 ${this._escapeHtml(shot.note)}</span>` : ''}
           </div>
 
-          ${shot.dialogue ? `<div class="shot-dialogue">💬 ${this._escapeHtml(shot.dialogue)}</div>` : ''}
+          ${shot.dialogue ? `
+            <div class="shot-dialogue" id="shotDialogue_${idx}">
+              💬 ${this._escapeHtml(shot.editedDialogue || shot.dialogue)}
+            </div>
+          ` : ''}
+
+          <!-- 编辑对话（点击分镜描述进入编辑） -->
+          <div style="margin-top:4px;font-size:11px;">
+            <span style="color:var(--text-muted);cursor:pointer;" onclick="StoryboardModule._editDialogue(${idx})">
+              ✏️ 编辑描述
+            </span>
+          </div>
+          
+          <div id="shotEditor_${idx}" style="display:none;margin-top:4px;">
+            <textarea style="width:100%;min-height:60px;font-size:12px;padding:6px;border:1px solid var(--border-default);border-radius:6px;background:var(--bg-input);color:var(--text-primary);resize:vertical;font-family:inherit;"
+              id="shotEditInput_${idx}">${this._escapeHtml(shot.editedDialogue || shot.dialogue || '')}</textarea>
+            <div style="display:flex;gap:4px;margin-top:4px;">
+              <button class="btn btn-primary btn-sm" style="font-size:11px;padding:2px 10px;" onclick="StoryboardModule._saveDialogue(${idx})">💾 保存</button>
+              <button class="btn btn-outline btn-sm" style="font-size:11px;padding:2px 10px;" onclick="StoryboardModule._cancelEditDialogue(${idx})">取消</button>
+            </div>
+          </div>
 
           <!-- 角色绑定 -->
           <div style="margin-top:8px;">
             <div style="font-size:11px;color:var(--text-muted);margin-bottom:4px;">👤 角色</div>
             <div style="display:flex;flex-wrap:wrap;gap:4px;">
-              ${(shot.characters && shot.characters.length > 0 ? shot.characters : [{name:'',reference:''}]).map((c, ci) => `
+              ${(shot.characters && shot.characters.length > 0 ? shot.characters : [{name:'',reference:'',assetId:''}]).map((c, ci) => `
                 <select class="form-select" style="flex:1;min-width:80px;padding:2px 20px 2px 6px;font-size:11px;min-height:auto;"
                   onchange="StoryboardModule._bindShotCharacter(${idx}, ${ci}, this.value)">
                   <option value="">-- 角色 --</option>
@@ -127,20 +182,27 @@ const StoryboardModule = {
             <div style="display:flex;flex-wrap:wrap;gap:4px;">
               ${(shot.props || []).map((p, pi) => `
                 <span style="font-size:11px;background:var(--bg-input);padding:1px 6px;border-radius:4px;">
-                  ${p} <span style="cursor:pointer;color:#EF4444;" onclick="StoryboardModule._removeShotProp(${idx}, ${pi})">×</span>
+                  ${this._escapeHtml(p)} <span style="cursor:pointer;color:#EF4444;" onclick="StoryboardModule._removeShotProp(${idx}, ${pi})">×</span>
                 </span>
               `).join('')}
-              <input type="text" placeholder="+添加道具" style="width:70px;font-size:11px;padding:1px 4px;border:1px solid var(--border-default);border-radius:4px;background:transparent;"
-                onkeydown="if(event.key==='Enter')StoryboardModule._addShotProp(${idx}, this.value);this.value=''">
+              <input type="text" placeholder="+添加道具" style="width:70px;font-size:11px;padding:1px 4px;border:1px solid var(--border-default);border-radius:4px;background:transparent;color:var(--text-primary);"
+                onkeydown="if(event.key==='Enter'){StoryboardModule._addShotProp(${idx}, this.value);this.value=''}">
             </div>
           </div>
+
+          <!-- 驳回备注 -->
+          ${isRejected ? `
+            <div style="margin-top:6px;">
+              <input type="text" placeholder="修改意见（可选）" value="${this._escapeHtml(shot.note || '')}" style="width:100%;font-size:11px;padding:3px 6px;border:1px solid #EF4444;border-radius:4px;background:var(--bg-input);color:var(--text-primary);"
+                onchange="StoryboardModule._setShotNote(${idx}, this.value)">
+            </div>
+          ` : ''}
         </div>
         <div class="shot-actions" style="flex-direction:column;gap:4px;">
           <button class="btn-icon" onclick="StoryboardModule._moveShot(${idx}, -1)" ${idx === 0 ? 'disabled' : ''}>↑</button>
           <button class="btn-icon" onclick="StoryboardModule._moveShot(${idx}, 1)" ${idx === App.state.storyboard.length - 1 ? 'disabled' : ''}>↓</button>
-          <button class="btn-icon" onclick="StoryboardModule._toggleApprove(${idx})"
-            style="${shot.approved ? 'color:var(--brand-green);' : ''}">${shot.approved ? '✓' : '○'}</button>
-          <button class="btn-icon" onclick="StoryboardModule._rejectShot(${idx})" style="color:#EF4444;">✕</button>
+          <button class="btn-icon" onclick="StoryboardModule._setShotStatus(${idx}, 'approved')" style="color:var(--brand-green);font-size:16px;" title="通过">👍</button>
+          <button class="btn-icon" onclick="StoryboardModule._setShotStatus(${idx}, 'rejected')" style="color:#EF4444;font-size:16px;" title="驳回">👎</button>
         </div>
       </div>
     `;
@@ -220,7 +282,9 @@ const StoryboardModule = {
           sceneAssetId: '',
           props: [],
           approved: false,
-          status: 'pending'
+          status: 'pending',
+          note: '',
+          editedDialogue: ''
         });
       });
     }
@@ -236,7 +300,68 @@ const StoryboardModule = {
     App.state.storyboard = allShots;
     this._persist();
     App.renderStep();
-    App.showNotification(`已生成 ${allShots.length} 个分镜，请为每个分镜绑定角色和场景`, 'success');
+    App.showNotification(`已生成 ${allShots.length} 个分镜`, 'success');
+  },
+
+  // ---- 审核操作 ----
+  _setShotStatus(idx, status) {
+    const shot = App.state.storyboard[idx];
+    if (!shot) return;
+    shot.status = status;
+    shot.approved = status === 'approved';
+    this._persist();
+    App.renderStep();
+    
+    if (status === 'approved') {
+      App.showNotification(`镜头 #${shot.shotNumber} 已通过`, 'success');
+    } else if (status === 'rejected') {
+      App.showNotification(`镜头 #${shot.shotNumber} 已驳回`, 'warning');
+    }
+  },
+
+  _setShotNote(idx, note) {
+    const shot = App.state.storyboard[idx];
+    if (!shot) return;
+    shot.note = note;
+    this._persist();
+  },
+
+  _approveAll() {
+    (App.state.storyboard || []).forEach(s => { s.approved = true; s.status = 'approved'; });
+    this._persist();
+    App.renderStep();
+    App.showNotification('所有分镜已审核通过', 'success');
+  },
+
+  _rejectAllPending() {
+    (App.state.storyboard || []).forEach(s => {
+      if (s.status === 'approved') return;
+      s.approved = false;
+      s.status = 'rejected';
+    });
+    this._persist();
+    App.renderStep();
+  },
+
+  // ---- 编辑对话 ----
+  _editDialogue(idx) {
+    const editor = document.getElementById(`shotEditor_${idx}`);
+    if (editor) editor.style.display = 'block';
+  },
+
+  _cancelEditDialogue(idx) {
+    const editor = document.getElementById(`shotEditor_${idx}`);
+    if (editor) editor.style.display = 'none';
+  },
+
+  _saveDialogue(idx) {
+    const input = document.getElementById(`shotEditInput_${idx}`);
+    const shot = App.state.storyboard[idx];
+    if (!input || !shot) return;
+    shot.editedDialogue = input.value;
+    this._persist();
+    App.renderStep();
+    App.showNotification(`镜头 #${shot.shotNumber} 描述已更新`, 'success');
   },
 
   // ---- 分镜角色/场景/道具绑定 ----
@@ -313,35 +438,10 @@ const StoryboardModule = {
     App.renderStep();
   },
 
-  _toggleApprove(idx) {
-    const shot = App.state.storyboard[idx];
-    if (!shot) return;
-    shot.approved = !shot.approved;
-    shot.status = shot.approved ? 'approved' : 'pending';
-    this._persist();
-    App.renderStep();
-  },
-
-  _rejectShot(idx) {
-    const shot = App.state.storyboard[idx];
-    if (!shot) return;
-    shot.approved = false;
-    shot.status = 'rejected';
-    this._persist();
-    App.renderStep();
-  },
-
-  _approveAll() {
-    (App.state.storyboard || []).forEach(s => { s.approved = true; s.status = 'approved'; });
-    this._persist();
-    App.renderStep();
-    App.showNotification('所有分镜已审核通过', 'success');
-  },
-
   canProceed() {
     const shots = App.state.storyboard;
     if (!shots || shots.length === 0) return false;
-    return shots.every(s => s.approved);
+    return shots.some(s => s.status === 'approved');
   },
 
   _escapeHtml(text) {
