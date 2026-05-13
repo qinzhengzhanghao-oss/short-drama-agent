@@ -127,30 +127,11 @@ const ScriptModule = {
 
     try {
       let text;
-
-      // 根据文件类型选择不同的读取方式
-      if (ext === 'txt') {
-        text = await Utils.readFileAsText(file);
-      } else if (ext === 'pdf') {
-        App.showNotification('正在解析 PDF 文件...', 'info', 3000);
-        text = await Utils.readFileAsText(file);
-        if (!text || text.trim().length === 0) {
-          App.showNotification('PDF 解析完成（内容为空）', 'warning', 2000);
-        }
-      } else if (ext === 'docx' || ext === 'doc') {
-        // docx/dox 是 ZIP 压缩包，需要用专用解析器
-        App.showNotification('正在解析 DOCX 文件...', 'info', 2000);
-        const arrayBuffer = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = (e) => resolve(e.target.result);
-          reader.onerror = () => reject(new Error('文件读取失败'));
-          reader.readAsArrayBuffer(file);
-        });
-        text = Utils._extractDocxText(arrayBuffer);
-        App.showNotification('DOCX 解析完成', 'success', 1500);
-      } else {
-        // fallback
-        text = await Utils.readFileAsText(file);
+      const extLabel = ext === 'pdf' ? 'PDF' : ext === 'docx' || ext === 'doc' ? 'DOCX' : 'TXT';
+      App.showNotification(`正在解析 ${extLabel} 文件...`, 'info', 2000);
+      text = await Utils.readFileAsText(file);
+      if (!text || text.trim().length === 0) {
+        App.showNotification(`${extLabel} 解析完成（内容为空）`, 'warning', 2000);
       }
 
       // 解析文本（流式处理）
