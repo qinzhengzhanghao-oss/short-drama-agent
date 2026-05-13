@@ -342,20 +342,62 @@ const Utils = {
     }
 
     // TXT 或未知格式
-    // 策略：先用 UTF-8 读，如果读出来有乱码字符再用 GBK 试
-    const text = await file.text();  // 浏览器的 file.text() 默认 UTF-8
-    // 检查是否有乱码（Unicode 替换字符 \uFFFD）
-    if (text.includes('\uFFFD')) {
-      // 用 GBK 重试
+    // 策略：先用 UTF-8 读，检查结果是否为有效的文本内容
+    const text = await file.text();
+    
+    // 检查是否为纯文本（而不是 ZIP/二进制乱码）
+    // 有效中文文本的特征：中文字符比例较高，且没有过多控制字符
+    const isValidText = this._isValidTextContent(text);
+    
+    if (!isValidText) {
+      // 可能是 docx 或 PDF 改名为 txt
       try {
         const buf = await file.arrayBuffer();
-        return new TextDecoder('GBK').decode(buf);
-      } catch {
-        // GBK 也失败，返回原始结果
-        return text;
-      }
+        // 检测 ZIP 签名
+        const u8 = new Uint8Array(buf);
+        if (u8[0] === 0x50 && u8[1] === 0x4B && u8[2] === 0x03 && u8[3] === 0x04) {
+          // 是 ZIP 格式，尝试 DOCX 解析
+          return await Utils._extractDocxText(buf);
+        }
+        // 尝试用 GBK 解码
+        const gbkText = new TextDecoder('GBK', {fatal: false}).decode(buf);
+        if (this._isValidTextContent(gbkText)) return gbkText;
+      } catch {}
+      
+      // fallback: 返回原始结果
+      return text;
     }
+    
+    // 检查是否有乱码字符
+    if (text.includes('\uFFFD')) {
+      try {
+        const buf = await file.arrayBuffer();
+        const gbkText = new TextDecoder('GBK', {fatal: false}).decode(buf);
+        return gbkText;
+      } catch {}
+    }
+    
     return text;
+  },
+  
+  /**
+   * 判断文本是否是有效的内容（不是二进制乱码）
+   */
+  _isValidTextContent(text) {
+    if (!text || text.length < 10) return true;
+    // 统计可打印字符比例
+    let printable = 0;
+    let chinese = 0;
+    for (let i = 0; i < Math.min(text.length, 500); i++) {
+      const code = text.charCodeAt(i);
+      if (code >= 0x4e00 && code <= 0x9fff) chinese++;
+      if (code >= 0x20 && code <= 0x7e) printable++;
+      if (code >= 0x4e00 && code <= 0x9fff) printable++;
+      if (code === 0x0a || code === 0x0d || code === 0x09) printable++;
+    }
+    const ratio = printable / Math.min(text.length, 500);
+    // 如果可打印字符不到 30%，很可能是二进制乱码
+    return ratio > 0.3;
   },
 
   readFileAsDataURL(file) {
