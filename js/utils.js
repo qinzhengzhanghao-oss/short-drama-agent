@@ -273,47 +273,204 @@ const Utils = {
   },
 
   /**
-   * 读取文件为文本（分段读取，支持大文件）
+   * 自动检测文本编码（通过BOM或字节特征）
+   * 返回建议的编码名称
+   */
+  _detectEncoding(buffer) {
+    // UTF-8 BOM: EF BB BF
+    if (buffer.byteLength >= 3 && 
+        buffer[0] === 0xEF && buffer[1] === 0xBB && buffer[2] === 0xBF) {
+      return 'UTF-8';
+    }
+    // UTF-16 LE BOM: FF FE
+    if (buffer.byteLength >= 2 && 
+        buffer[0] === 0xFF && buffer[1] === 0xFE) {
+      return 'UTF-16LE';
+    }
+    // UTF-16 BE BOM: FE FF
+    if (buffer.byteLength >= 2 && 
+        buffer[0] === 0xFE && buffer[1] === 0xFF) {
+      return 'UTF-16BE';
+    }
+    // 无BOM，尝试检测非ASCII字节来判断是否为GBK/中文编码
+    let gbkScore = 0;
+    let utf8Score = 0;
+    let i = 0;
+    while (i < Math.min(buffer.byteLength, 1024)) {
+      const b = buffer[i];
+      // ASCII范围
+      if (b < 0x80) {
+        i++;
+        continue;
+      }
+      // UTF-8多字节序列
+      if (b >= 0xC0 && b < 0xE0 && i + 1 < buffer.byteLength) {
+        // 2字节 UTF-8: 110xxxxx 10xxxxxx
+        if ((buffer[i+1] & 0xC0) === 0x80) {
+          utf8Score += 2;
+          i += 2;
+          continue;
+        }
+      } else if (b >= 0xE0 && b < 0xF0 && i + 2 < buffer.byteLength) {
+        // 3字节 UTF-8: 1110xxxx 10xxxxxx 10xxxxxx
+        if ((buffer[i+1] & 0xC0) === 0x80 && (buffer[i+2] & 0xC0) === 0x80) {
+          utf8Score += 3;
+          i += 3;
+          continue;
+        }
+      }
+      // GBK范围：高字节 0x81-0xFE，低字节 0x40-0xFE
+      if (b >= 0x81 && b <= 0xFE && i + 1 < buffer.byteLength) {
+        const lo = buffer[i+1];
+        if ((lo >= 0x40 && lo <= 0x7E) || (lo >= 0x80 && lo <= 0xFE)) {
+          gbkScore += 2;
+          i += 2;
+          continue;
+        }
+      }
+      i++;
+    }
+    
+    // 判断：如果GBK分数显著高于UTF-8，则为GBK编码
+    if (gbkScore > utf8Score * 1.5 && gbkScore > 10) {
+      return 'GBK';
+    }
+    // 默认 UTF-8
+    return 'UTF-8';
+  },
+
+  /**
+   * 读取文件为文本（支持编码自动检测，分段读取支持大文件）
    */
   readFileAsText(file) {
     return new Promise((resolve, reject) => {
-      // 小文件（< 1MB）直接读
-      if (file.size < 1024 * 1024) {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target.result);
-        reader.onerror = () => reject(new Error('文件读取失败'));
-        if (file.type === 'application/pdf') {
-          reject(new Error('PDF解析需要额外库支持'));
-        } else {
-          reader.readAsText(file);
-        }
+      if (file.type === 'application/pdf') {
+        reject(new Error('PDF解析需要额外库支持'));
         return;
       }
 
-      // 大文件使用 Blob 分片读取
-      const CHUNK_SIZE = 256 * 1024; // 256KB 每片
-      let offset = 0;
-      const chunks = [];
-      const totalSize = file.size;
-
-      function readNextChunk() {
-        const blob = file.slice(offset, offset + CHUNK_SIZE);
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          chunks.push(e.target.result);
-          offset += CHUNK_SIZE;
-          if (offset < totalSize) {
-            // 异步调度，避免阻塞UI
-            setTimeout(readNextChunk, 0);
+      // 小文件（< 1MB）直接读
+      if (file.size < 1024 * 1024) {
+        // 先读前几个字节检测编码
+        const headerBlob = file.slice(0, Math.min(file.size, 2048));
+        const headerReader = new FileReader();
+        headerReader.onload = () => {
+          const buf = new Uint8Array(headerReader.result);
+          const encoding = Utils._detectEncoding(buf);
+          
+          // 用检测到的编码读取整个文件
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(e.target.result);
+          reader.onerror = () => reject(new Error('文件读取失败'));
+          
+          if (encoding === 'GBK' || encoding === 'GB2312' || encoding === 'GB18030') {
+            // 如果已检测为 GBK，用 UTF-8 读然后尝试 TextDecoder
+            reader.readAsArrayBuffer(file);
+            reader.onload = (e) => {
+              try {
+                const decoder = new TextDecoder('GBK', { fatal: false });
+                const text = decoder.decode(e.target.result);
+                resolve(text);
+              } catch {
+                // fallback: 用 UTF-8 再试
+                const utf8Reader = new FileReader();
+                utf8Reader.onload = (ev) => resolve(ev.target.result);
+                utf8Reader.readAsText(file);
+              }
+            };
           } else {
-            resolve(chunks.join(''));
+            reader.readAsText(file, encoding);
           }
         };
-        reader.onerror = () => reject(new Error('文件读取失败（大文件分片）'));
-        reader.readAsText(blob);
+        headerReader.onerror = () => {
+          // fallback
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(e.target.result);
+          reader.readAsText(file);
+        };
+        headerReader.readAsArrayBuffer(headerBlob);
+        return;
       }
 
-      readNextChunk();
+      // 大文件使用 Blob 分片读取，先检测编码
+      const headerBlob = file.slice(0, Math.min(file.size, 2048));
+      const headerReader = new FileReader();
+      headerReader.onload = () => {
+        const buf = new Uint8Array(headerReader.result);
+        const encoding = Utils._detectEncoding(buf);
+        
+        const isGbk = encoding === 'GBK' || encoding === 'GB2312' || encoding === 'GB18030';
+        const CHUNK_SIZE = 256 * 1024;
+        let offset = 0;
+        const chunks = [];
+        const totalSize = file.size;
+
+        function readNextChunk() {
+          const blob = file.slice(offset, offset + CHUNK_SIZE);
+          if (isGbk) {
+            // GBK编码用 ArrayBuffer + TextDecoder
+            const reader = new FileReader();
+            reader.onload = (e) => {
+              try {
+                const decoder = new TextDecoder('GBK', { fatal: false });
+                const text = decoder.decode(e.target.result);
+                chunks.push(text);
+              } catch {
+                // fallback
+                const textReader = new FileReader();
+                textReader.onload = (ev) => chunks.push(ev.target.result);
+                textReader.readAsText(blob);
+              }
+              offset += CHUNK_SIZE;
+              if (offset < totalSize) {
+                setTimeout(readNextChunk, 0);
+              } else {
+                resolve(chunks.join(''));
+              }
+            };
+            reader.onerror = () => reject(new Error('文件读取失败（大文件分片）'));
+            reader.readAsArrayBuffer(blob);
+          } else {
+            const reader = new FileReader();
+            reader.onload = (e) => {
+              chunks.push(e.target.result);
+              offset += CHUNK_SIZE;
+              if (offset < totalSize) {
+                setTimeout(readNextChunk, 0);
+              } else {
+                resolve(chunks.join(''));
+              }
+            };
+            reader.onerror = () => reject(new Error('文件读取失败（大文件分片）'));
+            reader.readAsText(blob, encoding);
+          }
+        }
+
+        readNextChunk();
+      };
+      headerReader.onerror = () => {
+        // fallback
+        const CHUNK_SIZE = 256 * 1024;
+        let offset = 0;
+        const chunks = [];
+        const totalSize = file.size;
+        function readNextChunk() {
+          const blob = file.slice(offset, offset + CHUNK_SIZE);
+          const reader = new FileReader();
+          reader.onload = (e) => {
+            chunks.push(e.target.result);
+            offset += CHUNK_SIZE;
+            if (offset < totalSize) {
+              setTimeout(readNextChunk, 0);
+            } else {
+              resolve(chunks.join(''));
+            }
+          };
+          reader.readAsText(blob);
+        }
+        readNextChunk();
+      };
+      headerReader.readAsArrayBuffer(headerBlob);
     });
   },
 
