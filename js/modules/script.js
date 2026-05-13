@@ -52,6 +52,12 @@ const ScriptModule = {
                 ${this._renderPreview()}
               </div>
             </div>
+            ${script._debug ? `
+              <div style="margin-top:8px;font-size:11px;color:var(--text-muted);padding:8px;background:var(--bg-input);border-radius:var(--radius-sm);">
+                <div>🔍 调试：中文字符=${script._debug.chineseCount} 替换字符=${script._debug.hasReplacement}</div>
+                <div style="word-break:break-all;margin-top:4px;">前200字符: ${this._escapeHtml(script._debug.previewFirst200)}</div>
+              </div>
+            ` : ''}
           </div>
         ` : ''}
       </div>
@@ -83,6 +89,12 @@ const ScriptModule = {
 
     try {
       const text = await Utils.readFileAsText(file);
+      
+      // 调试：检查文本前200字符的合法性
+      const debugPreview = text ? text.substring(0, 200) : '(空)'; 
+      const chineseCount = (text.match(/[\u4e00-\u9fff]/g) || []).length;
+      const hasReplacement = text.includes('\uFFFD');
+      
       const parsed = Utils.parseScript(text);
 
       App.state.script = {
@@ -97,13 +109,19 @@ const ScriptModule = {
         bindings: {},
         fullText: text,
         preview: text.substring(0, 5000),
-        parsedAt: Date.now()
+        parsedAt: Date.now(),
+        _debug: { chineseCount, hasReplacement, previewFirst200: debugPreview }
       };
       this._persist();
 
+      const debugHtml = hasReplacement 
+        ? '<br><span style="font-size:11px;color:#F59E0B;">⚠️ 检测到编码问题（含替换字符）</span>'
+        : chineseCount > 10 
+          ? '<br><span style="font-size:11px;color:var(--brand-green);">✅ 编码正常</span>'
+          : '<br><span style="font-size:11px;color:#F59E0B;">⚠️ 中文较少，可能编码不匹配</span>';
+
       statusEl.innerHTML = `<div style="text-align:center;padding:12px;color:var(--brand-green);font-size:14px;">
-        ✅ 解析成功！${parsed.lineCount} 行，${parsed.entities.length} 个角色/场景 <br>
-        <span style="font-size:11px;color:var(--text-muted);">实体绑定将在分镜审核步骤完成</span>
+        ✅ 解析成功！${parsed.lineCount} 行，${chineseCount} 个中文字符 ${debugHtml}
       </div>`;
 
       App.renderStep();
