@@ -357,46 +357,60 @@ const Utils = {
       return await Utils._extractPdfText(buf);
     }
     
-    // 真正的 TXT 文件：用 arrayBuffer + TextDecoder，尝试所有常见编码
+    // 真正的 TXT 文件：用 arrayBuffer + TextDecoder
     const buf = await file.arrayBuffer();
-    const first16 = new Uint8Array(buf.slice(0, Math.min(buf.byteLength, 16)));
-    const hexBytes = Array.from(first16).map(b => b.toString(16).padStart(2,'0')).join(' ');
-    console.log('File magic bytes:', hexBytes);
     
-    // 尝试顺序：UTF-8 -> GBK -> UTF-16LE -> UTF-16BE -> Latin-1
-    // 选择中文字符最多的那个结果
-    const candidates = [];
-    
-    const testEncodings = ['UTF-8', 'GBK', 'UTF-16LE', 'UTF-16BE', 'ISO-8859-1', 'Shift_JIS', 'EUC-KR', 'Big5'];
-    
-    for (const enc of testEncodings) {
-      try {
-        const decoded = new TextDecoder(enc, {fatal: false}).decode(buf);
-        // 统计中文字符
-        let chineseCount = 0;
-        let replacementCount = 0;
-        for (let i = 0; i < Math.min(decoded.length, 2000); i++) {
-          const code = decoded.charCodeAt(i);
-          if (code >= 0x4e00 && code <= 0x9fff) chineseCount++;
-          if (code === 0xFFFD) replacementCount++;
+    // 只比较两种最常用的中文编码：UTF-8 和 GBK
+    // 用更精确的评分来判断哪个是正确的
+    function scoreText(text) {
+      let validChinese = 0;    // 常见汉字（常用3500字）
+      let rareChinese = 0;     // 冷僻汉字
+      let replacements = 0;    // 替换字符 \uFFFD
+      let total = Math.min(text.length, 3000);
+      
+      for (let i = 0; i < total; i++) {
+        const code = text.charCodeAt(i);
+        if (code === 0xFFFD) { replacements++; continue; }
+        if (code >= 0x4e00 && code <= 0x9fff) {
+          // 常用汉字范围：0x4e00-0x9fa5
+          if (code <= 0x9fa5) validChinese++;
+          else rareChinese++;
         }
-        candidates.push({ enc, chineseCount, replacementCount, text: decoded });
-      } catch {}
+      }
+      
+      // 评分：有效中文多 + 替换字符少 = 高分
+      // 冷僻汉字要打折（因为可能是错误解码的产物）
+      return validChinese * 3 + rareChinese * 1 - replacements * 10;
     }
     
-    // 排序：中文字符最多且替换字符最少的
-    candidates.sort((a, b) => {
-      if (b.chineseCount !== a.chineseCount) return b.chineseCount - a.chineseCount;
-      return a.replacementCount - b.replacementCount;
-    });
+    let utf8Text, gbkText;
+    let utf8Score = -999, gbkScore = -999;
     
-    if (candidates.length > 0) {
-      const best = candidates[0];
-      console.log('Best encoding:', best.enc, 'Chinese chars:', best.chineseCount, 'Replacements:', best.replacementCount);
-      return best.text;
+    try {
+      utf8Text = new TextDecoder('UTF-8', {fatal: false}).decode(buf);
+      utf8Score = scoreText(utf8Text);
+    } catch {}
+    
+    try {
+      gbkText = new TextDecoder('GBK', {fatal: false}).decode(buf);
+      gbkScore = scoreText(gbkText);
+    } catch {}
+    
+    console.log('UTF-8 score:', utf8Score, 'GBK score:', gbkScore);
+    
+    if (gbkScore > utf8Score && gbkText) {
+      return gbkText;
     }
     
-    throw new Error('无法解码文件，请确认文件编码为 UTF-8 或 GBK');
+    if (utf8Text) {
+      return utf8Text;
+    }
+    
+    if (gbkText) {
+      return gbkText;
+    }
+    
+    throw new Error('无法解码文件');
   },
 
   readFileAsDataURL(file) {
