@@ -341,56 +341,21 @@ const Utils = {
       return await Utils._extractDocxText(buf);
     }
 
-    // TXT 或未知格式：编码检测 + 分段读取
-    return new Promise((resolve, reject) => {
-      // 先检测编码
-      const headerBlob = file.slice(0, Math.min(file.size, 2048));
-      const headerReader = new FileReader();
-      headerReader.onload = () => {
-        const buf = new Uint8Array(headerReader.result);
-        const encoding = Utils._detectEncoding(buf);
-        const isGbk = encoding === 'GBK' || encoding === 'GB2312';
-
-        if (file.size < 1024 * 1024) {
-          // 小文件直接读
-          if (isGbk) {
-            file.arrayBuffer().then(buf => {
-              try { resolve(new TextDecoder('GBK', {fatal: false}).decode(buf)); }
-              catch { const r = new FileReader(); r.onload = e => resolve(e.target.result); r.readAsText(file); }
-            });
-          } else {
-            const r = new FileReader();
-            r.onload = e => resolve(e.target.result);
-            r.onerror = () => reject(new Error('文件读取失败'));
-            r.readAsText(file);
-          }
-          return;
-        }
-
-        // 大文件分片
-        const CHUNK = 256 * 1024;
-        let pos = 0;
-        const chunks = [];
-        const total = file.size;
-
-        function nextChunk() {
-          const blob = file.slice(pos, pos + CHUNK);
-          if (isGbk) {
-            blob.arrayBuffer().then(buf => {
-              try { chunks.push(new TextDecoder('GBK').decode(buf)); } catch { chunks.push(''); }
-              pos += CHUNK;
-              pos < total ? setTimeout(nextChunk, 0) : resolve(chunks.join(''));
-            });
-          } else {
-            const r = new FileReader();
-            r.onload = e => { chunks.push(e.target.result); pos += CHUNK; pos < total ? setTimeout(nextChunk, 0) : resolve(chunks.join('')); };
-            r.readAsText(blob);
-          }
-        }
-        nextChunk();
-      };
-      headerReader.readAsArrayBuffer(headerBlob);
-    });
+    // TXT 或未知格式
+    // 策略：先用 UTF-8 读，如果读出来有乱码字符再用 GBK 试
+    const text = await file.text();  // 浏览器的 file.text() 默认 UTF-8
+    // 检查是否有乱码（Unicode 替换字符 \uFFFD）
+    if (text.includes('\uFFFD')) {
+      // 用 GBK 重试
+      try {
+        const buf = await file.arrayBuffer();
+        return new TextDecoder('GBK').decode(buf);
+      } catch {
+        // GBK 也失败，返回原始结果
+        return text;
+      }
+    }
+    return text;
   },
 
   readFileAsDataURL(file) {
