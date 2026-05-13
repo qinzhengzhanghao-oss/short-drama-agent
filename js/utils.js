@@ -247,7 +247,7 @@ const Utils = {
   /**
    * 解压 Deflate-raw 数据
    */
-  static async _inflate(compressed) {
+  async _inflate(compressed) {
     const ds = new DecompressionStream('deflate-raw');
     const writer = ds.writable.getWriter();
     writer.write(compressed);
