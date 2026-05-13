@@ -134,6 +134,12 @@ const StoryboardModule = {
               💬 ${this._escapeHtml(shot.editedDialogue || shot.dialogue)}
             </div>
           ` : ''}
+          
+          ${shot.prompt ? `
+            <div style="margin-top:6px;padding:6px;background:rgba(139,92,246,0.08);border-radius:6px;font-size:10px;line-height:1.6;color:var(--text-muted);white-space:pre-wrap;font-family:monospace;">
+              ${this._escapeHtml(shot.prompt)}
+            </div>
+          ` : ''}
 
           <!-- 编辑对话（点击分镜描述进入编辑） -->
           <div style="margin-top:4px;font-size:11px;">
@@ -208,7 +214,7 @@ const StoryboardModule = {
     `;
   },
 
-  // ---- 分镜生成 ----
+  // ---- 分镜生成（影视专业化逻辑）----
   async _generateShots() {
     const script = App.state.script;
     if (!script || !script.fullText) {
@@ -223,78 +229,213 @@ const StoryboardModule = {
 
     const assets = App.state.assets || [];
     const binds = script.bindings || {};
-    const sceneTypes = ['远景', '全景', '中景', '近景', '特写', '大特写'];
-    const cameraMoves = ['固定镜头', '推镜', '拉镜', '摇镜', '移镜', '跟镜', '升降'];
     const allShots = [];
-    const BATCH = 200;
-
-    for (let bs = 0; bs < lines.length; bs += BATCH) {
-      const be = Math.min(bs + BATCH, lines.length);
-      const batch = lines.slice(bs, be);
-      const raw = [];
-      let cur = '', cnt = 0;
-
-      batch.forEach((line, idx) => {
-        const t = line.trim();
-        if (!t) return;
-        if (t.includes('"') || t.includes('「') || t.includes('\u201c') || t.length > 30) {
-          if (cur) raw.push(cur);
-          cur = t; cnt++;
-        } else if (t.length > 5) {
-          cur += (cur ? '\n' : '') + t;
+    
+    // 标准景别序列（按情绪递进）
+    const sceneTypes = ['远景', '全景', '中景', '近景', '特写', '大特写'];
+    // 标准运镜方式
+    const cameraMoves = ['固定镜头', '推镜', '拉镜', '摇镜', '移镜', '跟镜', '升降'];
+    // 标准情绪标签
+    const moods = ['平静', '紧张', '愉悦', '悲伤', '愤怒', '惊喜', '悬疑', '温馨', '庄重'];
+    
+    // ===== 剧本分析 =====
+    // 识别场景标记行（如【场景1】、场景：、Scene）
+    let sceneSegments = [];
+    let currentScene = '默认场景';
+    
+    lines.forEach((line) => {
+      const trimmed = line.trim();
+      // 检测场景切换标记
+      if (/^【/.test(trimmed) && /】/.test(trimmed)) {
+        currentScene = trimmed.replace(/[【】]/g, '');
+      } else if (/^场景[:：]/.test(trimmed)) {
+        currentScene = trimmed.replace(/^场景[:：]\s*/, '');
+      } else if (/^scene/i.test(trimmed)) {
+        currentScene = trimmed.replace(/^scene[:：]\s*/i, '');
+      }
+      sceneSegments.push({ line: trimmed, scene: currentScene });
+    });
+    
+    // ===== 按影视语言划分分镜 =====
+    // 规则：
+    // 1. 引号内的内容 + 前一行动作 = 一个镜头（对话镜头）
+    // 2. 场景切换 = 新镜头起点
+    // 3. 纯动作/描写 = 独立镜头
+    // 4. 连续动作描述分拆为多个镜头
+    
+    const shotContents = [];
+    
+    for (let i = 0; i < sceneSegments.length; i++) {
+      const seg = sceneSegments[i];
+      const line = seg.line;
+      if (!line) continue;
+      
+      // 场景切换标记：单独作为一个过渡镜头
+      if (/^【/.test(line) || /^场景[:：]/.test(line) || /^scene[:：]/i.test(line)) {
+        if (shotContents.length > 0) {
+          // 先结束上一个镜头组
         }
-        if (cnt % 5 === 0 && cur && idx > 0 && idx < batch.length - 1) { raw.push(cur); cur = ''; }
-      });
-      if (cur) raw.push(cur);
-
-      if (raw.length < 2 && batch.length > 5) {
-        raw.length = 0;
-        let c = '';
-        batch.forEach((l, i) => {
-          c += (c ? '\n' : '') + l;
-          if ((i+1) % 3 === 0) { raw.push(c); c = ''; }
+        shotContents.push({
+          type: 'scene_transition',
+          text: `场景转换：${seg.scene}`,
+          scene: seg.scene,
+          duration: 2
         });
-        if (c) raw.push(c);
+        continue;
       }
-
-      raw.forEach((content, i) => {
-        const chars = [];
-        Object.entries(binds).forEach(([name, assetId]) => {
-          if (content.includes(name)) {
-            const a = assets.find(x => x.id === assetId);
-            if (a && a.variants && a.variants.length > 0) {
-              const p = a.variants.find(v => v.isPrimary) || a.variants[0];
-              chars.push({ name, reference: p.images && p.images[0] || '', assetId });
+      
+      // 对话行：包含「」或 "" 或 冒号+引号
+      if (/[「「]/.test(line) && /[」」]/.test(line)) {
+        const dialogue = line;
+        // 查找前一行的动作/描写作为镜头铺垫
+        const prevLine = i > 0 ? sceneSegments[i-1].line : '';
+        if (prevLine && prevLine.length > 1 && !/[「「」」]/.test(prevLine) && !/^【/.test(prevLine) && !/^场景/.test(prevLine)) {
+          // 合并前置动作 + 对话 = 一个完整镜头
+          shotContents.push({
+            type: 'dialogue_with_action',
+            text: prevLine + '\n' + dialogue,
+            dialogue: dialogue,
+            action: prevLine,
+            scene: seg.scene,
+            duration: Math.max(3, Math.min(10, Math.round(dialogue.length / 15)))
+          });
+          // 跳过前一行（已经被合并了）
+          if (i > 0) sceneSegments[i-1].used = true;
+        } else {
+          shotContents.push({
+            type: 'dialogue',
+            text: dialogue,
+            dialogue: dialogue,
+            action: '',
+            scene: seg.scene,
+            duration: Math.max(3, Math.min(8, Math.round(dialogue.length / 15)))
+          });
+        }
+        continue;
+      }
+      
+      // 已经被前置对话合并的跳过
+      if (seg.used) continue;
+      
+      // 动作/描写行（没有引号）
+      if (line.length > 2 && !/^【/.test(line) && !/^场景/.test(line)) {
+        // 长动作描写拆分为多个镜头
+        if (line.length > 50 && (line.includes('，') || line.includes('。'))) {
+          const parts = line.split(/[。！？]/).filter(p => p.trim().length > 5);
+          parts.forEach((part, pi) => {
+            const trimmed = part.trim();
+            if (trimmed) {
+              shotContents.push({
+                type: 'action',
+                text: trimmed + (pi === parts.length - 1 ? '' : ''),
+                dialogue: '',
+                action: trimmed,
+                scene: seg.scene,
+                duration: Math.max(2, Math.min(6, Math.round(trimmed.length / 20)))
+              });
             }
-          }
-        });
-
-        allShots.push({
-          id: Utils.uid(),
-          shotNumber: allShots.length + 1,
-          duration: Math.max(3, Math.min(15, Math.round(Utils.estimateDuration(content)))),
-          sceneType: sceneTypes[(allShots.length) % sceneTypes.length],
-          camera: cameraMoves[(allShots.length) % cameraMoves.length],
-          dialogue: content.substring(0, 200),
-          sceneBackground: '',
-          sceneImage: '',
-          characters: chars.length > 0 ? chars : [{name:'',reference:'',assetId:''}],
-          sceneAssetId: '',
-          props: [],
-          approved: false,
-          status: 'pending',
-          note: '',
-          editedDialogue: ''
-        });
-      });
-    }
-
-    if (allShots.length > 300) {
-      const keep = allShots.filter(s => s.dialogue && s.characters.some(c => c.assetId));
-      if (keep.length > 20) {
-        allShots.length = 0;
-        allShots.push(...keep.slice(0, 200));
+          });
+        } else {
+          shotContents.push({
+            type: 'action',
+            text: line,
+            dialogue: '',
+            action: line,
+            scene: seg.scene,
+            duration: Math.max(2, Math.min(5, 3))
+          });
+        }
       }
+    }
+    
+    // ===== 生成专业提示词 =====
+    shotContents.forEach((sc, idx) => {
+      // 智能分配景别（基于镜头内容）
+      let sceneType;
+      if (sc.type === 'scene_transition') {
+        sceneType = '远景';
+      } else if (sc.type === 'action' && sc.text.length < 20) {
+        sceneType = '全景';
+      } else if (sc.text.includes('表情') || sc.text.includes('眼神') || sc.text.includes('流泪') || sc.text.includes('微笑')) {
+        sceneType = '特写';
+      } else if (sc.dialogue && /[大声喊叫]/ .test(sc.dialogue)) {
+        sceneType = '近景';
+      } else {
+        sceneType = sceneTypes[Math.min(idx, sceneTypes.length - 1)];
+      }
+      
+      // 智能分配运镜
+      let camera;
+      if (sc.type === 'scene_transition') {
+        camera = '摇镜';
+      } else if (sc.action && (sc.action.includes('走进') || sc.action.includes('走向'))) {
+        camera = '推镜';
+      } else if (sc.action && sc.action.includes('离开')) {
+        camera = '拉镜';
+      } else if (sc.action && (sc.action.includes('转') || sc.action.includes('环顾'))) {
+        camera = '摇镜';
+      } else if (sc.type === 'dialogue') {
+        camera = '固定镜头';
+      } else {
+        camera = cameraMoves[idx % cameraMoves.length];
+      }
+      
+      // 情绪推断
+      let mood = moods[idx % moods.length];
+      if (sc.text.includes('哭') || sc.text.includes('悲') || sc.text.includes('难过')) mood = '悲伤';
+      else if (sc.text.includes('笑') || sc.text.includes('高兴') || sc.text.includes('开心')) mood = '愉悦';
+      else if (sc.text.includes('惊') || sc.text.includes('意外')) mood = '惊喜';
+      else if (sc.text.includes('怒') || sc.text.includes('生气') || sc.text.includes('骂')) mood = '愤怒';
+      else if (sc.text.includes('紧') || sc.text.includes('焦虑')) mood = '紧张';
+      
+      // 匹配资产中的角色
+      const chars = [];
+      const textToMatch = sc.text || sc.dialogue || '';
+      Object.entries(binds).forEach(([name, assetId]) => {
+        if (textToMatch.includes(name)) {
+          const a = assets.find(x => x.id === assetId);
+          if (a && a.variants && a.variants.length > 0) {
+            const p = a.variants.find(v => v.isPrimary) || a.variants[0];
+            chars.push({ name, reference: p.images && p.images[0] || '', assetId });
+          }
+        }
+      });
+      
+      // == 构造专业提示词 ==
+      const charDesc = chars.map(c => c.name).join('、') || '角色';
+      const promptParts = [
+        `[景别] ${sceneType}`,
+        `[运镜] ${camera}`,
+        `[场景] ${sc.scene || '默认场景'}`,
+        `[动作] ${sc.action || '无'}`,
+        `[台词] ${sc.dialogue || '无'}`,
+        `[情绪] ${mood}`
+      ];
+      
+      allShots.push({
+        id: Utils.uid(),
+        shotNumber: allShots.length + 1,
+        duration: sc.duration,
+        sceneType: sceneType,
+        camera: camera,
+        dialogue: sc.text.substring(0, 200),
+        sceneBackground: sc.scene || '',
+        sceneImage: '',
+        characters: chars.length > 0 ? chars : [{name:'',reference:'',assetId:''}],
+        sceneAssetId: '',
+        props: [],
+        prompt: promptParts.join('\n'),
+        mood: mood,
+        approved: false,
+        status: 'pending',
+        note: '',
+        editedDialogue: ''
+      });
+    });
+    
+    // 过长限制
+    if (allShots.length > 500) {
+      allShots.length = 500;
     }
 
     App.state.storyboard = allShots;
