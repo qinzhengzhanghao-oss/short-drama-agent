@@ -1,7 +1,8 @@
 /**
  * storyboard.js — 分镜审核模块
  * ShortDrama Studio v2.0
- * 改动: 每个分镜可单独通过/驳回，无需全部审核即可进入下一步
+ * 改动: 每个分镜可单独通过/驳回/编辑/删除/插入
+ *       分镜生成通过 AI 调用 DeepSeek API
  */
 
 const StoryboardModule = {
@@ -113,7 +114,7 @@ const StoryboardModule = {
               <div class="shot-meta">
                 <span class="shot-meta-item">⏱ ${shot.duration || 5}s</span>
                 <span class="shot-meta-item">✅ 已通过</span>
-                ${shot.dialogue ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;">${this._escapeHtml(shot.dialogue.substring(0,40))}</span>` : ''}
+                ${shot.dialogue ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;">${this._escapeHtml(shot.dialogue && shot.dialogue.substring ? shot.dialogue.substring(0,40) : '')}</span>` : ''}
               </div>
             </div>
             <div class="shot-actions" style="flex-direction:row;gap:4px;align-items:center;">
@@ -151,7 +152,7 @@ const StoryboardModule = {
             </div>
           ` : ''}
 
-          <!-- 编辑对话（点击分镜描述进入编辑） -->
+          <!-- 编辑对话 -->
           <div style="margin-top:4px;font-size:11px;">
             <span style="color:var(--text-muted);cursor:pointer;" onclick="StoryboardModule._editDialogue(${idx})">
               ✏️ 编辑描述
@@ -226,7 +227,7 @@ const StoryboardModule = {
     `;
   },
 
-  // ---- 分镜生成（影视专业化逻辑）----
+  // ---- 分镜生成（调用 DeepSeek API）----
   async _generateShots() {
     const script = App.state.script;
     if (!script || !script.fullText) {
@@ -234,187 +235,220 @@ const StoryboardModule = {
       return;
     }
 
+    App.showNotification('正在调用 AI 生成专业分镜...', 'info', 60000);
+
+    // 1. 从剧本中提取信息
+    const text = script.fullText.substring(0, 8000); // 取前8000字
+    const entities = script.entities || [];
+    const charNames = entities.filter(e => e.type === 'character').map(e => e.name).join('、');
+    const sceneNames = entities.filter(e => e.type === 'scene').map(e => e.name).join('、');
+    
+    // 2. 构建 Prompt
+    const systemPrompt = `你是一位专业的影视分镜师。请根据提供的剧本内容，输出专业的分镜脚本。
+
+输出格式为JSON数组，每个元素代表一个镜头，包含以下字段：
+- shotNumber: 镜头编号（数字）
+- sceneType: 景别（远景/全景/中景/近景/特写/大特写）
+- focus: 焦点（人物/场景/道具/动作）
+- characters: 角色列表（数组，每个元素包含name角色名、action动作、expression表情）
+- dialogue: 台词
+- monologue: 独白
+- camera: 镜头运动（固定镜头/推镜/拉镜/摇镜/移镜/跟镜/升降）
+- scene: 场景描述
+- duration: 时长（秒）
+- mood: 情绪
+- soundEffect: 音效
+- description: 画面描述（详细描述画面构图、人物位置、光影）
+
+规则：
+1. 每个镜头只表达一个完整的画面信息
+2. 对话和动作要分别对应不同的镜头
+3. 景别要丰富变化，不要连续使用相同景别
+4. 镜头运动要合理，对话场景多用固定镜头，情绪高潮用推镜
+5. 人物情绪要准确贴合剧情走向
+6. 时长根据台词长度和动作复杂度合理分配`;
+
+    const userPrompt = `请为下面的剧本生成专业分镜脚本：
+
+剧本内容：
+${text}
+
+角色列表：${charNames || '未知'}
+场景列表：${sceneNames || '未知'}
+
+请直接输出JSON数组，不要包含其他文字。`;
+
+    try {
+      // 3. 调用 DeepSeek API
+      const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer sk-45988f3fb8d04b038599a182dd54f505'
+        },
+        body: JSON.stringify({
+          model: 'deepseek-chat',
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ],
+          temperature: 0.8,
+          max_tokens: 8192
+        })
+      });
+
+      if (!response.ok) {
+        const errData = await response.text();
+        throw new Error(`API请求失败: ${response.status} ${errData}`);
+      }
+
+      const data = await response.json();
+      const content = data.choices[0].message.content;
+      
+      // 4. 解析 JSON
+      let shotsFromAI;
+      try {
+        // 尝试提取 JSON（AI 可能返回 markdown 包裹）
+        const jsonMatch = content.match(/```(?:json)?\s*([\s\S]*?)\s*```/) || content.match(/\[[\s\S]*\]/);
+        const jsonStr = jsonMatch ? jsonMatch[1] || jsonMatch[0] : content;
+        shotsFromAI = JSON.parse(jsonStr);
+        if (!Array.isArray(shotsFromAI)) throw new Error('不是数组');
+      } catch (e) {
+        console.error('AI返回解析失败:', content);
+        throw new Error('AI返回格式不正确，无法解析分镜');
+      }
+
+      // 5. 转换为系统分镜格式
+      const assets = App.state.assets || [];
+      const allShots = shotsFromAI.map((s, idx) => ({
+        id: Utils.uid(),
+        shotNumber: idx + 1,
+        duration: s.duration || Math.max(3, Math.min(10, 5)),
+        sceneType: s.sceneType || '中景',
+        focus: s.focus || '',
+        camera: s.camera || '固定镜头',
+        dialogue: (s.dialogue || s.description || '').substring(0, 200),
+        monologue: s.monologue || '',
+        sceneBackground: s.scene || '',
+        sceneImage: '',
+        characters: (s.characters || []).length > 0 
+          ? s.characters.map(c => ({
+              name: c.name || '',
+              action: c.action || '',
+              expression: c.expression || '',
+              reference: '',
+              assetId: ''
+            }))
+          : [{name:'',action:'',expression:'',reference:'',assetId:''}],
+        sceneAssetId: '',
+        props: [],
+        mood: s.mood || '平静',
+        soundEffect: s.soundEffect || '',
+        description: s.description || '',
+        prompt: `[景别] ${s.sceneType || '中景'}\n[焦点] ${s.focus || ''}\n[运镜] ${s.camera || '固定镜头'}\n[场景] ${s.scene || ''}\n[人物] ${(s.characters || []).map(c => `${c.name}(${c.action || ''}, ${c.expression || ''})`).join('、')}\n[台词] ${s.dialogue || ''}\n[独白] ${s.monologue || ''}\n[情绪] ${s.mood || '平静'}\n[音效] ${s.soundEffect || ''}\n[描述] ${s.description || ''}`,
+        approved: false,
+        status: 'pending',
+        note: '',
+        editedDialogue: ''
+      }));
+
+      // 6. 限制数量
+      if (allShots.length > 500) {
+        allShots.length = 500;
+      }
+
+      App.state.storyboard = allShots;
+      this._persist();
+      App.renderStep();
+      App.showNotification(`AI 已生成 ${allShots.length} 个专业分镜`, 'success');
+
+    } catch (err) {
+      console.error('AI分镜生成失败:', err);
+      App.showNotification(`分镜生成失败: ${err.message}，请检查 API 配置`, 'error');
+      // 回退到本地生成
+      App.showNotification('正在使用本地规则生成备用分镜...', 'info', 3000);
+      this._generateShotsLocal();
+    }
+  },
+
+  // ---- 备用本地分镜生成 ----
+  async _generateShotsLocal() {
+    const script = App.state.script;
+    if (!script || !script.fullText) return;
+
     const text = script.fullText;
     const lines = text.split('\n').filter(l => l.trim());
-    const isLarge = lines.length > 500;
-    if (isLarge) App.showNotification(`正在处理 ${lines.length} 行...`, 'info', 3000);
-
     const assets = App.state.assets || [];
     const binds = script.bindings || {};
-    const allShots = [];
-    
-    // 标准景别序列（按情绪递进）
     const sceneTypes = ['远景', '全景', '中景', '近景', '特写', '大特写'];
-    // 标准运镜方式
     const cameraMoves = ['固定镜头', '推镜', '拉镜', '摇镜', '移镜', '跟镜', '升降'];
-    // 标准情绪标签
     const moods = ['平静', '紧张', '愉悦', '悲伤', '愤怒', '惊喜', '悬疑', '温馨', '庄重'];
-    
-    // ===== 剧本分析 =====
-    // 识别场景标记行（如【场景1】、场景：、Scene）
+    const allShots = [];
+
+    // 场景分段
     let sceneSegments = [];
     let currentScene = '默认场景';
-    
     lines.forEach((line) => {
-      const trimmed = line.trim();
-      // 检测场景切换标记
-      if (/^【/.test(trimmed) && /】/.test(trimmed)) {
-        currentScene = trimmed.replace(/[【】]/g, '');
-      } else if (/^场景[:：]/.test(trimmed)) {
-        currentScene = trimmed.replace(/^场景[:：]\s*/, '');
-      } else if (/^scene/i.test(trimmed)) {
-        currentScene = trimmed.replace(/^scene[:：]\s*/i, '');
-      }
-      sceneSegments.push({ line: trimmed, scene: currentScene });
+      const t = line.trim();
+      if (/^【/.test(t) && /】/.test(t)) currentScene = t.replace(/[【】]/g, '');
+      else if (/^场景[:：]/.test(t)) currentScene = t.replace(/^场景[:：]\s*/, '');
+      sceneSegments.push({ line: t, scene: currentScene });
     });
-    
-    // ===== 按影视语言划分分镜 =====
-    // 规则：
-    // 1. 引号内的内容 + 前一行动作 = 一个镜头（对话镜头）
-    // 2. 场景切换 = 新镜头起点
-    // 3. 纯动作/描写 = 独立镜头
-    // 4. 连续动作描述分拆为多个镜头
-    
-    const shotContents = [];
-    
+
+    // 按对话和动作生成分镜
     for (let i = 0; i < sceneSegments.length; i++) {
       const seg = sceneSegments[i];
       const line = seg.line;
       if (!line) continue;
-      
-      // 场景切换标记：单独作为一个过渡镜头
-      if (/^【/.test(line) || /^场景[:：]/.test(line) || /^scene[:：]/i.test(line)) {
-        if (shotContents.length > 0) {
-          // 先结束上一个镜头组
-        }
-        shotContents.push({
-          type: 'scene_transition',
-          text: `场景转换：${seg.scene}`,
-          scene: seg.scene,
-          duration: 2
+      if (/^【/.test(line) || /^场景[:：]/.test(line)) {
+        allShots.push({
+          type: 'transition', text: `场景转换：${seg.scene}`, scene: seg.scene, duration: 2
         });
         continue;
       }
-      
-      // 对话行：包含「」或 "" 或 冒号+引号
       if (/[「「]/.test(line) && /[」」]/.test(line)) {
-        const dialogue = line;
-        // 查找前一行的动作/描写作为镜头铺垫
         const prevLine = i > 0 ? sceneSegments[i-1].line : '';
-        if (prevLine && prevLine.length > 1 && !/[「「」」]/.test(prevLine) && !/^【/.test(prevLine) && !/^场景/.test(prevLine)) {
-          // 合并前置动作 + 对话 = 一个完整镜头
-          shotContents.push({
-            type: 'dialogue_with_action',
-            text: prevLine + '\n' + dialogue,
-            dialogue: dialogue,
-            action: prevLine,
-            scene: seg.scene,
-            duration: Math.max(3, Math.min(10, Math.round(dialogue.length / 15)))
+        if (prevLine && prevLine.length > 1 && !/[「「」」]/.test(prevLine) && !/^【/.test(prevLine)) {
+          allShots.push({
+            text: prevLine + '\n' + line, dialogue: line, action: prevLine, scene: seg.scene,
+            duration: Math.max(3, Math.min(10, Math.round(line.length / 15)))
           });
-          // 跳过前一行（已经被合并了）
           if (i > 0) sceneSegments[i-1].used = true;
         } else {
-          shotContents.push({
-            type: 'dialogue',
-            text: dialogue,
-            dialogue: dialogue,
-            action: '',
-            scene: seg.scene,
-            duration: Math.max(3, Math.min(8, Math.round(dialogue.length / 15)))
+          allShots.push({
+            text: line, dialogue: line, action: '', scene: seg.scene,
+            duration: Math.max(3, Math.min(8, Math.round(line.length / 15)))
           });
         }
         continue;
       }
-      
-      // 已经被前置对话合并的跳过
       if (seg.used) continue;
-      
-      // 动作/描写行（没有引号）
-      if (line.length > 2 && !/^【/.test(line) && !/^场景/.test(line)) {
-        // 长动作描写拆分为多个镜头
-        if (line.length > 50 && (line.includes('，') || line.includes('。'))) {
-          const parts = line.split(/[。！？]/).filter(p => p.trim().length > 5);
-          parts.forEach((part, pi) => {
-            const trimmed = part.trim();
-            if (trimmed) {
-              shotContents.push({
-                type: 'action',
-                text: trimmed + (pi === parts.length - 1 ? '' : ''),
-                dialogue: '',
-                action: trimmed,
-                scene: seg.scene,
-                duration: Math.max(2, Math.min(6, Math.round(trimmed.length / 20)))
-              });
-            }
-          });
-        } else {
-          shotContents.push({
-            type: 'action',
-            text: line,
-            dialogue: '',
-            action: line,
-            scene: seg.scene,
-            duration: Math.max(2, Math.min(5, 3))
-          });
-        }
+      if (line.length > 2) {
+        allShots.push({
+          text: line, dialogue: '', action: line, scene: seg.scene, duration: 3
+        });
       }
     }
-    
-    // ===== 生成专业提示词 =====
-    shotContents.forEach((sc, idx) => {
-      // 智能分配景别（基于镜头内容）
-      let sceneType;
-      if (sc.type === 'scene_transition') {
-        sceneType = '远景';
-      } else if (sc.type === 'action' && sc.text.length < 20) {
-        sceneType = '全景';
-      } else if (sc.text.includes('表情') || sc.text.includes('眼神') || sc.text.includes('流泪') || sc.text.includes('微笑')) {
-        sceneType = '特写';
-      } else if (sc.dialogue && /[大声喊叫]/ .test(sc.dialogue)) {
-        sceneType = '近景';
-      } else {
-        sceneType = sceneTypes[Math.min(idx, sceneTypes.length - 1)];
-      }
-      
-      // 智能分配运镜
-      let camera;
-      if (sc.type === 'scene_transition') {
-        camera = '摇镜';
-      } else if (sc.action && (sc.action.includes('走进') || sc.action.includes('走向'))) {
-        camera = '推镜';
-      } else if (sc.action && sc.action.includes('离开')) {
-        camera = '拉镜';
-      } else if (sc.action && (sc.action.includes('转') || sc.action.includes('环顾'))) {
-        camera = '摇镜';
-      } else if (sc.type === 'dialogue') {
-        camera = '固定镜头';
-      } else {
-        camera = cameraMoves[idx % cameraMoves.length];
-      }
-      
-      // 情绪推断
+
+    allShots.forEach((sc, idx) => {
+      let sceneType = '中景';
+      let camera = '固定镜头';
       let mood = moods[idx % moods.length];
-      if (sc.text.includes('哭') || sc.text.includes('悲') || sc.text.includes('难过')) mood = '悲伤';
-      else if (sc.text.includes('笑') || sc.text.includes('高兴') || sc.text.includes('开心')) mood = '愉悦';
-      else if (sc.text.includes('惊') || sc.text.includes('意外')) mood = '惊喜';
-      else if (sc.text.includes('怒') || sc.text.includes('生气') || sc.text.includes('骂')) mood = '愤怒';
-      else if (sc.text.includes('紧') || sc.text.includes('焦虑')) mood = '紧张';
-      
-      // 匹配资产中的角色
+      if (sc.text && (sc.text.includes('哭') || sc.text.includes('悲'))) mood = '悲伤';
+      else if (sc.text && (sc.text.includes('笑') || sc.text.includes('高兴'))) mood = '愉悦';
+      else if (sc.text && (sc.text.includes('怒') || sc.text.includes('骂'))) mood = '愤怒';
+
       const chars = [];
-      const textToMatch = sc.text || sc.dialogue || '';
       Object.entries(binds).forEach(([name, assetId]) => {
-        if (textToMatch.includes(name)) {
+        if ((sc.text || '').includes(name)) {
           const a = assets.find(x => x.id === assetId);
           if (a && a.variants && a.variants.length > 0) {
             const p = a.variants.find(v => v.isPrimary) || a.variants[0];
-            chars.push({ name, reference: p.images && p.images[0] || '', assetId });
+            chars.push({ name, reference: p.images && p.images[0] || '', assetId, action: '', expression: '' });
           }
         }
       });
-      
-      // == 构造专业提示词 ==
-      const charDesc = chars.map(c => c.name).join('、') || '角色';
+
       const promptParts = [
         `[景别] ${sceneType}`,
         `[运镜] ${camera}`,
@@ -423,33 +457,33 @@ const StoryboardModule = {
         `[台词] ${sc.dialogue || '无'}`,
         `[情绪] ${mood}`
       ];
-      
-      allShots.push({
+
+      allShots[idx] = {
         id: Utils.uid(),
-        shotNumber: allShots.length + 1,
-        duration: sc.duration,
+        shotNumber: idx + 1,
+        duration: sc.duration || 3,
         sceneType: sceneType,
+        focus: '',
         camera: camera,
-        dialogue: sc.text.substring(0, 200),
+        dialogue: (sc.text || '').substring(0, 200),
+        monologue: '',
         sceneBackground: sc.scene || '',
         sceneImage: '',
-        characters: chars.length > 0 ? chars : [{name:'',reference:'',assetId:''}],
+        characters: chars.length > 0 ? chars : [{name:'',action:'',expression:'',reference:'',assetId:''}],
         sceneAssetId: '',
         props: [],
-        prompt: promptParts.join('\n'),
         mood: mood,
+        soundEffect: '',
+        description: sc.text || '',
+        prompt: promptParts.join('\n'),
         approved: false,
         status: 'pending',
         note: '',
         editedDialogue: ''
-      });
+      };
     });
-    
-    // 过长限制
-    if (allShots.length > 500) {
-      allShots.length = 500;
-    }
 
+    if (allShots.length > 500) allShots.length = 500;
     App.state.storyboard = allShots;
     this._persist();
     App.renderStep();
@@ -485,7 +519,6 @@ const StoryboardModule = {
     shots.forEach((s, i) => s.shotNumber = i + 1);
     this._persist();
     App.renderStep();
-    App.showNotification(`镜头 #${shot.shotNumber} 已删除`, 'info');
   },
 
   _setShotNote(idx, note) {
@@ -537,14 +570,17 @@ const StoryboardModule = {
   _bindShotCharacter(shotIdx, charIdx, assetId) {
     const shot = App.state.storyboard[shotIdx];
     if (!shot) return;
-    if (!shot.characters) shot.characters = [{name:'',reference:'',assetId:''}];
+    if (!shot.characters) shot.characters = [{name:'',reference:'',assetId:'',action:'',expression:''}];
     if (charIdx >= shot.characters.length) return;
 
     const asset = App.state.assets.find(a => a.id === assetId);
+    const existing = shot.characters[charIdx];
     shot.characters[charIdx] = {
-      name: asset ? asset.name : '',
-      reference: (asset && asset.variants && asset.variants[0] && asset.variants[0].images && asset.variants[0].images[0]) || '',
-      assetId: assetId
+      name: asset ? asset.name : existing.name || '',
+      action: existing.action || '',
+      expression: existing.expression || '',
+      reference: (asset && asset.variants && asset.variants[0] && asset.variants[0].images && asset.variants[0].images[0]) || existing.reference || '',
+      assetId: assetId || existing.assetId || ''
     };
     this._persist();
     App.renderStep();
@@ -554,7 +590,7 @@ const StoryboardModule = {
     const shot = App.state.storyboard[shotIdx];
     if (!shot) return;
     if (!shot.characters) shot.characters = [];
-    shot.characters.push({name:'',reference:'',assetId:''});
+    shot.characters.push({name:'',action:'',expression:'',reference:'',assetId:''});
     App.renderStep();
   },
 
@@ -593,15 +629,19 @@ const StoryboardModule = {
       shotNumber: idx + 1,
       duration: Math.max(2, Math.min(10, Math.round(dialogue.length / 15))),
       sceneType: '中景',
+      focus: '',
       camera: '固定镜头',
       dialogue: dialogue.trim().substring(0, 200),
+      monologue: '',
       sceneBackground: '',
       sceneImage: '',
-      characters: [{name:'',reference:'',assetId:''}],
+      characters: [{name:'',action:'',expression:'',reference:'',assetId:''}],
       sceneAssetId: '',
       props: [],
-      prompt: `[景别] 中景\n[运镜] 固定镜头\n[场景] \n[动作] ${dialogue.trim().substring(0, 80)}\n[台词] \n[情绪] 平静`,
       mood: '平静',
+      soundEffect: '',
+      description: '',
+      prompt: `[景别] 中景\n[运镜] 固定镜头\n[场景] \n[动作] ${dialogue.trim().substring(0, 80)}\n[台词] \n[情绪] 平静`,
       approved: false,
       status: 'pending',
       note: '',
