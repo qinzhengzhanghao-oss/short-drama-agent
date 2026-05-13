@@ -357,61 +357,53 @@ const Utils = {
       return await Utils._extractPdfText(buf);
     }
     
-    // 真正的 TXT 文件：用 arrayBuffer + 双编码试读
+    // 真正的 TXT 文件：先用 GBK 解码（WPS 另存的 TXT 绝大多数是 GBK），
+    // 如果替换字符过多则回退 UTF-8
     const buf = await file.arrayBuffer();
-    const u8 = new Uint8Array(buf);
     
-    // 方法1: 检测是否有 UTF-8 特有的多字节序列
-    let isDefinitelyUtf8 = true;
-    let utf8SequenceCount = 0;
-    let possibleGbkPairCount = 0;
+    let gbkText = null, utf8Text = null;
     
-    for (let i = 0; i < Math.min(buf.byteLength, 1000); i++) {
-      const b = u8[i];
-      // UTF-8 2字节序列: 110xxxxx 10xxxxxx
-      if (b >= 0xC0 && b <= 0xDF && i + 1 < buf.byteLength) {
-        const n = u8[i+1];
-        if (n >= 0x80 && n <= 0xBF) {
-          utf8SequenceCount++;
-          i++;
-          continue;
+    try {
+      gbkText = new TextDecoder('GBK', {fatal: false}).decode(buf);
+    } catch {}
+    
+    if (gbkText) {
+      // 检查 GBK 解码结果中的替换字符
+      let gbkReplacementCount = 0;
+      for (let i = 0; i < Math.min(gbkText.length, 2000); i++) {
+        if (gbkText.charCodeAt(i) === 0xFFFD) gbkReplacementCount++;
+      }
+      
+      // 如果替换字符很少（<0.5%），说明 GBK 解码成功
+      const gbkRatio = gbkReplacementCount / Math.min(gbkText.length, 2000);
+      if (gbkRatio < 0.005) {
+        return gbkText;
+      }
+      
+      // GBK 替换字符较多，尝试 UTF-8
+      try {
+        utf8Text = new TextDecoder('UTF-8', {fatal: false}).decode(buf);
+        let utf8ReplacementCount = 0;
+        for (let i = 0; i < Math.min(utf8Text.length, 2000); i++) {
+          if (utf8Text.charCodeAt(i) === 0xFFFD) utf8ReplacementCount++;
         }
-      }
-      // UTF-8 3字节序列: 1110xxxx 10xxxxxx 10xxxxxx
-      if (b >= 0xE0 && b <= 0xEF && i + 2 < buf.byteLength) {
-        const n1 = u8[i+1], n2 = u8[i+2];
-        if (n1 >= 0x80 && n1 <= 0xBF && n2 >= 0x80 && n2 <= 0xBF) {
-          utf8SequenceCount++;
-          i += 2;
-          continue;
+        const utf8Ratio = utf8ReplacementCount / Math.min(utf8Text.length, 2000);
+        if (utf8Ratio < 0.005) {
+          return utf8Text;
         }
-      }
-      // 如果高字节不是 UTF-8 多字节序列的开始字节
-      if (b >= 0x80 && b <= 0xBF) {
-        // 10xxxxxx 作为开头字节说明不是 UTF-8
-        isDefinitelyUtf8 = false;
-      }
-      // GBK 双字节: 高字节 81-FE, 低字节 40-FE
-      if (b >= 0x81 && b <= 0xFE && i + 1 < buf.byteLength) {
-        const lo = u8[i+1];
-        if ((lo >= 0x40 && lo <= 0x7E) || (lo >= 0x80 && lo <= 0xFE)) {
-          possibleGbkPairCount++;
-        }
-      }
+      } catch {}
+      
+      // 都有替换字符，选替换字符少的
+      return gbkText;
     }
     
-    // 策略: 如果 UTF-8 序列较多则优先 UTF-8，否则 GBK
-    const preferGbk = possibleGbkPairCount > utf8SequenceCount * 2;
+    // GBK 解码失败，尝试 UTF-8
+    try {
+      utf8Text = new TextDecoder('UTF-8', {fatal: false}).decode(buf);
+      return utf8Text;
+    } catch {}
     
-    let utf8Text = null, gbkText = null;
-    try { utf8Text = new TextDecoder('UTF-8', {fatal: false}).decode(buf); } catch {}
-    try { gbkText = new TextDecoder('GBK', {fatal: false}).decode(buf); } catch {}
-    
-    if (preferGbk && gbkText) return gbkText;
-    if (utf8Text) return utf8Text;
-    if (gbkText) return gbkText;
-    
-    throw new Error('无法解码文件');
+    throw new Error('无法解码文件，请确认文件编码为 UTF-8 或 GBK');
   },
 
   readFileAsDataURL(file) {

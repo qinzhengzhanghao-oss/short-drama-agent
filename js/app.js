@@ -369,7 +369,10 @@ const App = {
       if (data.script) {
         this.state.script = {
           ...data.script,
-          fullText: '',    // 全文不会持久化
+          // 从 sessionStorage 恢复全文
+          fullText: (function(){
+            try { return sessionStorage.getItem('_scriptFullText') || ''; } catch { return ''; }
+          })(),    // 从 sessionStorage 恢复
           _needsReload: data.script._hasFullText === true
         };
         // 如果以前上传过且有meta数据但没有全文，显示提示

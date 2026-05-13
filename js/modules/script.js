@@ -156,6 +156,11 @@ const ScriptModule = {
   _persist() {
     const fullText = App.state.script ? App.state.script.fullText : null;
     App._persist();
-    if (App.state.script && fullText) App.state.script.fullText = fullText;
+    if (App.state.script && fullText) {
+      App.state.script.fullText = fullText;
+      // 同时在 sessionStorage 中备份全文，防止刷新丢失
+      try { sessionStorage.setItem('_scriptFullText', fullText); } catch {}
+    }
   }
+}
 };
