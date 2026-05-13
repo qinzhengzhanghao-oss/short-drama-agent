@@ -209,6 +209,7 @@ const StoryboardModule = {
           <button class="btn-icon" onclick="StoryboardModule._moveShot(${idx}, 1)" ${idx === App.state.storyboard.length - 1 ? 'disabled' : ''}>↓</button>
           <button class="btn-icon" onclick="StoryboardModule._setShotStatus(${idx}, 'approved')" style="color:var(--brand-green);font-size:16px;" title="通过">👍</button>
           <button class="btn-icon" onclick="StoryboardModule._setShotStatus(${idx}, 'rejected')" style="color:#EF4444;font-size:16px;" title="驳回">👎</button>
+          <button class="btn-icon" onclick="StoryboardModule._deleteShot(${idx})" style="color:#6B7280;font-size:12px;" title="删除">🗑</button>
         </div>
       </div>
     `;
@@ -458,6 +459,22 @@ const StoryboardModule = {
     } else if (status === 'rejected') {
       App.showNotification(`镜头 #${shot.shotNumber} 已驳回`, 'warning');
     }
+  },
+
+  _deleteShot(idx) {
+    const shots = App.state.storyboard;
+    if (!shots || shots.length <= 1) {
+      App.showNotification('至少保留一个分镜', 'warning');
+      return;
+    }
+    const shot = shots[idx];
+    if (!shot) return;
+    if (!confirm(`确定删除镜头 #${shot.shotNumber} 吗？`)) return;
+    shots.splice(idx, 1);
+    shots.forEach((s, i) => s.shotNumber = i + 1);
+    this._persist();
+    App.renderStep();
+    App.showNotification(`镜头 #${shot.shotNumber} 已删除`, 'info');
   },
 
   _setShotNote(idx, note) {
