@@ -145,17 +145,27 @@ const ProjectModule = {
       App.state.project.name = name;
       App.state.project.style = style;
     } else {
-      // 创建新项目
+      // 创建新项目（清空旧数据）
       const project = {
         id: Utils.uid(),
         name,
         style,
         createdAt: Date.now(),
         updatedAt: Date.now(),
-        status: 'draft'
+        status: 'draft',
+        assets: [],
+        script: null,
+        storyboard: [],
+        promptGroups: [],
+        generationTasks: []
       };
       projects.push(project);
       App.state.project = project;
+      App.state.assets = [];
+      App.state.script = null;
+      App.state.storyboard = [];
+      App.state.promptGroups = [];
+      App.state.generationTasks = [];
     }
 
     App.state.projects = projects;
