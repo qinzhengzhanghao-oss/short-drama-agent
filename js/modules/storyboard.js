@@ -103,9 +103,11 @@ const StoryboardModule = {
     // 如果已通过，折叠显示
     if (isApproved) {
       return `
-        <div style="position:relative;">
+        <div style="border-top:1px dashed var(--border-default);margin-top:8px;padding-top:8px;">
+          <div style="display:flex;gap:4px;align-items:center;margin-bottom:4px;">
+            <button class="btn-icon" onclick="StoryboardModule._insertShotAbove(${idx})" style="font-size:12px;color:var(--brand-purple);" title="在此上方插入分镜">＋ 插入</button>
+          </div>
           <div class="shot-card shot-approved">
-            <button class="btn-icon" onclick="StoryboardModule._insertShotAbove(${idx})" style="position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:var(--bg-card);border:1px solid var(--border-default);border-radius:50%;width:24px;height:24px;font-size:14px;cursor:pointer;z-index:2;display:flex;align-items:center;justify-content:center;color:var(--brand-purple);">＋</button>
             <div class="shot-number">${shot.shotNumber || idx + 1}</div>
             <div class="shot-content">
               <div class="shot-meta">
@@ -123,8 +125,11 @@ const StoryboardModule = {
     }
 
     return `
-      <div style="position:relative;">
-        <button class="btn-icon" onclick="StoryboardModule._insertShotAbove(${idx})" style="position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:var(--bg-card);border:1px solid var(--border-default);border-radius:50%;width:24px;height:24px;font-size:14px;cursor:pointer;z-index:2;display:flex;align-items:center;justify-content:center;color:var(--brand-purple);">＋</button>
+      <div style="border-top:1px dashed var(--border-default);margin-top:8px;padding-top:8px;">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px;">
+          <button class="btn btn-outline btn-sm" onclick="StoryboardModule._insertShotAbove(${idx})" style="font-size:11px;padding:1px 8px;color:var(--brand-purple);border-color:var(--border-default);">＋ 插入镜头</button>
+          <button class="btn btn-outline btn-sm" onclick="StoryboardModule._deleteShot(${idx})" style="font-size:11px;padding:1px 8px;color:#EF4444;border-color:var(--border-default);">🗑 删除</button>
+        </div>
         <div class="shot-card" style="opacity:${cardOpacity};border-color:${cardBorder}">
         <div class="shot-number">${shot.shotNumber || idx + 1}</div>
         <div class="shot-content">
@@ -214,7 +219,7 @@ const StoryboardModule = {
           <button class="btn-icon" onclick="StoryboardModule._moveShot(${idx}, 1)" ${idx === App.state.storyboard.length - 1 ? 'disabled' : ''}>↓</button>
           <button class="btn-icon" onclick="StoryboardModule._setShotStatus(${idx}, 'approved')" style="color:var(--brand-green);font-size:16px;" title="通过">👍</button>
           <button class="btn-icon" onclick="StoryboardModule._setShotStatus(${idx}, 'rejected')" style="color:#EF4444;font-size:16px;" title="驳回">👎</button>
-          <button class="btn-icon" onclick="StoryboardModule._deleteShot(${idx})" style="color:#6B7280;font-size:12px;" title="删除">🗑</button>
+          <!-- 删除按钮已经移到卡片上方 -->
         </div>
       </div>
       </div>
