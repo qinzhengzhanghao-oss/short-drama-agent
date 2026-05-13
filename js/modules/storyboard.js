@@ -103,24 +103,29 @@ const StoryboardModule = {
     // 如果已通过，折叠显示
     if (isApproved) {
       return `
-        <div class="shot-card shot-approved">
-          <div class="shot-number">${shot.shotNumber || idx + 1}</div>
-          <div class="shot-content">
-            <div class="shot-meta">
-              <span class="shot-meta-item">⏱ ${shot.duration || 5}s</span>
-              <span class="shot-meta-item">✅ 已通过</span>
-              ${shot.dialogue ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;">${this._escapeHtml(shot.dialogue.substring(0,40))}</span>` : ''}
+        <div style="position:relative;">
+          <div class="shot-card shot-approved">
+            <button class="btn-icon" onclick="StoryboardModule._insertShotAbove(${idx})" style="position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:var(--bg-card);border:1px solid var(--border-default);border-radius:50%;width:24px;height:24px;font-size:14px;cursor:pointer;z-index:2;display:flex;align-items:center;justify-content:center;color:var(--brand-purple);">＋</button>
+            <div class="shot-number">${shot.shotNumber || idx + 1}</div>
+            <div class="shot-content">
+              <div class="shot-meta">
+                <span class="shot-meta-item">⏱ ${shot.duration || 5}s</span>
+                <span class="shot-meta-item">✅ 已通过</span>
+                ${shot.dialogue ? `<span style="font-size:11px;color:var(--text-muted);margin-left:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:200px;">${this._escapeHtml(shot.dialogue.substring(0,40))}</span>` : ''}
+              </div>
             </div>
-          </div>
-          <div class="shot-actions" style="flex-direction:column;gap:4px;">
-            <button class="btn-icon" title="取消通过" onclick="StoryboardModule._setShotStatus(${idx}, 'pending')" style="color:var(--brand-green);">↩</button>
+            <div class="shot-actions" style="flex-direction:column;gap:4px;">
+              <button class="btn-icon" title="取消通过" onclick="StoryboardModule._setShotStatus(${idx}, 'pending')" style="color:var(--brand-green);">↩</button>
+            </div>
           </div>
         </div>
       `;
     }
 
     return `
-      <div class="shot-card" style="opacity:${cardOpacity};border-color:${cardBorder}">
+      <div style="position:relative;">
+        <button class="btn-icon" onclick="StoryboardModule._insertShotAbove(${idx})" style="position:absolute;top:-12px;left:50%;transform:translateX(-50%);background:var(--bg-card);border:1px solid var(--border-default);border-radius:50%;width:24px;height:24px;font-size:14px;cursor:pointer;z-index:2;display:flex;align-items:center;justify-content:center;color:var(--brand-purple);">＋</button>
+        <div class="shot-card" style="opacity:${cardOpacity};border-color:${cardBorder}">
         <div class="shot-number">${shot.shotNumber || idx + 1}</div>
         <div class="shot-content">
           <div class="shot-meta">
@@ -211,6 +216,7 @@ const StoryboardModule = {
           <button class="btn-icon" onclick="StoryboardModule._setShotStatus(${idx}, 'rejected')" style="color:#EF4444;font-size:16px;" title="驳回">👎</button>
           <button class="btn-icon" onclick="StoryboardModule._deleteShot(${idx})" style="color:#6B7280;font-size:12px;" title="删除">🗑</button>
         </div>
+      </div>
       </div>
     `;
   },
@@ -570,6 +576,37 @@ const StoryboardModule = {
     shot.sceneBackground = asset ? asset.name : '';
     this._persist();
     App.renderStep();
+  },
+
+  _insertShotAbove(idx) {
+    const shots = App.state.storyboard;
+    if (!shots) return;
+    const dialogue = prompt('输入新分镜的描述：', '');
+    if (!dialogue || !dialogue.trim()) return;
+    const newShot = {
+      id: Utils.uid(),
+      shotNumber: idx + 1,
+      duration: Math.max(2, Math.min(10, Math.round(dialogue.length / 15))),
+      sceneType: '中景',
+      camera: '固定镜头',
+      dialogue: dialogue.trim().substring(0, 200),
+      sceneBackground: '',
+      sceneImage: '',
+      characters: [{name:'',reference:'',assetId:''}],
+      sceneAssetId: '',
+      props: [],
+      prompt: `[景别] 中景\n[运镜] 固定镜头\n[场景] \n[动作] ${dialogue.trim().substring(0, 80)}\n[台词] \n[情绪] 平静`,
+      mood: '平静',
+      approved: false,
+      status: 'pending',
+      note: '',
+      editedDialogue: ''
+    };
+    shots.splice(idx, 0, newShot);
+    shots.forEach((s, i) => s.shotNumber = i + 1);
+    this._persist();
+    App.renderStep();
+    App.showNotification('新分镜已插入', 'success');
   },
 
   _groupShots(shots) {
