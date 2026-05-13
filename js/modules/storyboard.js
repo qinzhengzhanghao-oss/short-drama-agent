@@ -237,13 +237,9 @@ const StoryboardModule = {
 
     App.showNotification('正在调用 AI 生成专业分镜...', 'info', 60000);
 
-    // 1. 从剧本中提取信息。如果剧本较短（<30000字）直接全量发送；否则截断提示用户
-    const text = script.fullText.length <= 30000 
-      ? script.fullText 
-      : script.fullText.substring(0, 30000);
-    if (script.fullText.length > 30000) {
-      App.showNotification('剧本较长（' + Math.round(script.fullText.length/1000) + 'k），已取前30000字', 'warning', 5000);
-    }
+    // 1. 全量剧本发送给AI
+    const text = script.fullText;
+    App.showNotification('正在分析 ' + Math.round(text.length/1000) + 'k 剧本...', 'info', 60000);
     const entities = script.entities || [];
     const charNames = entities.filter(e => e.type === 'character').map(e => e.name).join('、');
     const sceneNames = entities.filter(e => e.type === 'scene').map(e => e.name).join('、');
